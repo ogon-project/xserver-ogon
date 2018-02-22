@@ -128,6 +128,7 @@ int monitorResolution = 0;
 
 const char *display;
 int displayfd = -1;
+int displayoffset;
 Bool explicit_display = FALSE;
 char *ConnectionInfo;
 

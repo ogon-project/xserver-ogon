@@ -762,7 +762,11 @@ ProcessCommandLine(int argc, char *argv[])
         }
         else if (strcmp(argv[i], "-displayfd") == 0) {
             if (++i < argc) {
+                char *tmp;
                 displayfd = atoi(argv[i]);
+                if ((tmp = strchr(argv[i], ':'))) {
+                    displayoffset = atoi(tmp + 1);
+                }
 #ifdef LOCK_SERVER
                 nolock = TRUE;
 #endif

@@ -30,6 +30,10 @@ if XWAYLAND
 XWAYLAND_SUBDIRS = xwayland
 endif
 
+if XOGON
+XOGON_SUBDIRS = xogon
+endif
+
 SUBDIRS =			\
 	$(XORG_SUBDIRS)		\
 	$(XWIN_SUBDIRS)		\
@@ -38,7 +42,8 @@ SUBDIRS =			\
 	$(DMX_SUBDIRS)		\
 	$(KDRIVE_SUBDIRS)	\
 	$(XQUARTZ_SUBDIRS)	\
-	$(XWAYLAND_SUBDIRS)
+	$(XWAYLAND_SUBDIRS)	\
+	$(XOGON_SUBDIRS)
 
 DIST_SUBDIRS = dmx xfree86 vfb xnest xwin xquartz kdrive xwayland
 

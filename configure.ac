@@ -1819,7 +1819,7 @@ fi
 
 dnl XOGON DDX
 
-PKG_CHECK_MODULES(XOGONMODULES, [xau $XDMCP_MODULES ogon-backend0 freerdp2 winpr2 freerdp-server2], [have_xogon=yes], [have_xogon=no])
+PKG_CHECK_MODULES(XOGONMODULES, [xau $XDMCP_MODULES ogon-backend1 freerdp2 winpr2 freerdp-server2], [have_xogon=yes], [have_xogon=no])
 AC_MSG_CHECKING([whether to build ogon-backend-x DDX])
 if test "x$XOGON" = xauto; then
 	XOGON="$have_xogon"

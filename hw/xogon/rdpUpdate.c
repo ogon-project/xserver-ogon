@@ -774,11 +774,17 @@ static int rds_service_accept(ogon_backend_service* service)
 	return 0;
 }
 
+extern int g_multitouchFd;
 int rds_service_disconnect(ogon_backend_service* service)
 {
 	KbdSessionDisconnect();
 
 	RemoveEnabledDevice(g_clientfd);
+	if (g_multitouchFd >= 0) {
+		RemoveEnabledDevice(g_multitouchFd);
+		g_multitouchFd = -1;
+		multitouchClose();
+	}
 
 	ogon_service_kill_client(service);
 
@@ -914,7 +920,6 @@ static void check_message_fds(fd_set *fdset)
 	return;
 }
 
-extern int g_multitouchFd;
 void rdp_check(void *blockData, int result, void *bitset)
 {
 	ogon_backend_service* service = g_service;
@@ -938,11 +943,6 @@ void rdp_check(void *blockData, int result, void *bitset)
 			case OGON_INCOMING_BYTES_INVALID_MESSAGE:
 			default:
 				rds_service_disconnect(service);
-				if (g_multitouchFd >= 0) {
-					RemoveEnabledDevice(g_multitouchFd);
-					g_multitouchFd = -1;
-					multitouchClose();
-				}
 				break;
 			}
 		}
@@ -965,6 +965,5 @@ void rdp_check(void *blockData, int result, void *bitset)
 			if (g_multitouchFd >= 0)
 				AddEnabledDevice(g_multitouchFd);
 		}
-
 	}
 }

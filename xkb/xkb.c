@@ -32,6 +32,7 @@ THE USE OR PERFORMANCE OF THIS SOFTWARE.
 #include <X11/X.h>
 #include <X11/Xproto.h>
 #include "misc.h"
+#include "windowstr.h"          /* focus struct      */
 #include "inputstr.h"
 #define	XKBSRV_NEED_FILE_FUNCS
 #include <xkbsrv.h>
@@ -40,6 +41,7 @@ THE USE OR PERFORMANCE OF THIS SOFTWARE.
 #include "xace.h"
 #include "xkb.h"
 #include "protocol-versions.h"
+#include "xsha1.h"
 
 #include <X11/extensions/XI.h>
 #include <X11/extensions/XKMformat.h>
@@ -1392,6 +1394,68 @@ XkbComputeGetMapReplySize(XkbDescPtr xkb, xkbGetMapReply * rep)
     return Success;
 }
 
+/***
+ * Broadcast a "OGON_KEYMAP_SENT" ClientMessage if a new key map was sent to
+ * the client with the input focus.
+ * This allows clients that generate virtual keyboard input to wait for the
+ * right moment to perform keyboard mapping changes.
+ */
+
+static int
+XkbKeySymsSentNotify(ClientPtr client, DeviceIntPtr dev, XkbDescPtr xkb)
+{
+    static const char atom_name[] = "OGON_KEYSYMS_SENT";
+    static Atom type_atom = None;
+    int numKeys, i;
+    XkbSymMapPtr symMap;
+    xEvent e;
+    void *sha1ctx = NULL;
+    unsigned char *sha1sum = NULL;
+
+    if (type_atom == None)
+        type_atom = MakeAtom(atom_name, strlen(atom_name), TRUE);
+
+    if (!client || !dev || !dev->focus ||
+        dev->focus->win == PointerRootWin ||
+        dev->focus->win == FollowKeyboardWin ||
+        dev->focus->win == NullWindow)
+    {
+        return Success;
+    }
+
+    /* only send message if this is the client with the input focus */
+    if (wClient(dev->focus->win) != client)
+        return Success;
+
+    numKeys = XkbNumKeys(xkb);
+    symMap = &xkb->map->key_sym_map[xkb->min_key_code];
+
+    sha1sum = (unsigned char*)e.u.clientMessage.u.b.bytes;
+
+    if (!(sha1ctx = x_sha1_init()))
+        return BadAlloc;
+
+    for (i = 0; i < numKeys; i++, symMap++) {
+        uint32_t ks = (uint32_t)xkb->map->syms[symMap->offset];
+        x_sha1_update(sha1ctx, (void*)&ks, sizeof(ks));
+    }
+    x_sha1_final(sha1ctx, sha1sum);
+
+    for (i = 1; i < currentMaxClients; i++) {
+        if (!clients[i] || clients[i] == client || clients[i]->clientState != ClientStateRunning)
+            continue;
+
+        e.u.u.type = ClientMessage;
+        e.u.u.detail = 8;
+        e.u.clientMessage.window = dev->focus->win->drawable.id;
+        e.u.clientMessage.u.b.type = type_atom;
+
+        WriteEventsToClient(clients[i], 1, &e);
+    }
+
+    return Success;
+}
+
 static int
 XkbSendMap(ClientPtr client, XkbDescPtr xkb, xkbGetMapReply * rep)
 {
@@ -1577,7 +1641,15 @@ ProcXkbGetMap(ClientPtr client)
 
     if ((status = XkbComputeGetMapReplySize(xkb, &rep)) != Success)
         return status;
-    return XkbSendMap(client, xkb, &rep);
+
+    if ((status = XkbSendMap(client, xkb, &rep)) != Success)
+	return status;
+
+    if (rep.nKeySyms) {
+        XkbKeySymsSentNotify(client, dev, xkb);
+    }
+
+    return Success;
 }
 
 /***====================================================================***/

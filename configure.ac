@@ -1112,7 +1112,7 @@ case "$DRI2,$HAVE_DRI2PROTO" in
 	yes,yes | auto,yes)
 		AC_DEFINE(DRI2, 1, [Build DRI2 extension])
 		DRI2=yes
-		LIBGL="gl >= 9.2.0"
+		LIBGL="gl >= 1.2"
 		SDK_REQUIRED_MODULES="$SDK_REQUIRED_MODULES $DRI2PROTO"
 		;;
 esac

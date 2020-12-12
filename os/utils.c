@@ -71,7 +71,6 @@ __stdcall unsigned long GetTickCount(void);
 #if !defined(WIN32) || !defined(__MINGW32__)
 #include <sys/time.h>
 #include <sys/resource.h>
-# define SMART_SCHEDULE_POSSIBLE
 #endif
 #include "misc.h"
 #include <X11/X.h>
@@ -81,21 +80,10 @@ __stdcall unsigned long GetTickCount(void);
 #include <X11/Xtrans/Xtrans.h>
 #include "input.h"
 #include "dixfont.h"
+#include <X11/fonts/libxfont2.h>
 #include "osdep.h"
 #include "extension.h"
-#ifdef X_POSIX_C_SOURCE
-#define _POSIX_C_SOURCE X_POSIX_C_SOURCE
 #include <signal.h>
-#undef _POSIX_C_SOURCE
-#else
-#if defined(_POSIX_SOURCE)
-#include <signal.h>
-#else
-#define _POSIX_SOURCE
-#include <signal.h>
-#undef _POSIX_SOURCE
-#endif
-#endif
 #ifndef WIN32
 #include <sys/wait.h>
 #endif
@@ -108,7 +96,7 @@ __stdcall unsigned long GetTickCount(void);
 
 #include <stdlib.h>             /* for malloc() */
 
-#if defined(TCPCONN) || defined(STREAMSCONN)
+#if defined(TCPCONN)
 #ifndef WIN32
 #include <netdb.h>
 #endif
@@ -135,6 +123,7 @@ Bool noDamageExtension = FALSE;
 Bool noDbeExtension = FALSE;
 #endif
 #ifdef DPMSExtension
+#include "dpmsproc.h"
 Bool noDPMSExtension = FALSE;
 #endif
 #ifdef GLXEXT
@@ -208,6 +197,10 @@ sig_atomic_t inSignalContext = FALSE;
 
 #if defined(SVR4) || defined(__linux__) || defined(CSRG_BASED)
 #define HAS_SAVED_IDS_AND_SETEUID
+#endif
+
+#ifdef MONOTONIC_CLOCK
+static clockid_t clockid;
 #endif
 
 OsSigHandlerPtr
@@ -314,7 +307,7 @@ LockServer(void)
     }
     if (lfd < 0)
         FatalError("Could not create lock file in %s\n", tmp);
-    snprintf(pid_str, sizeof(pid_str), "%10ld\n", (long) getpid());
+    snprintf(pid_str, sizeof(pid_str), "%10lu\n", (unsigned long) getpid());
     if (write(lfd, pid_str, 11) != 11)
         FatalError("Could not write pid to lock file in %s\n", tmp);
     (void) fchmod(lfd, 0444);
@@ -427,6 +420,24 @@ GiveUp(int sig)
     errno = olderrno;
 }
 
+#ifdef MONOTONIC_CLOCK
+void
+ForceClockId(clockid_t forced_clockid)
+{
+    struct timespec tp;
+
+    BUG_RETURN (clockid);
+
+    clockid = forced_clockid;
+
+    if (clock_gettime(clockid, &tp) != 0) {
+        FatalError("Forced clock id failed to retrieve current time: %s\n",
+                   strerror(errno));
+        return;
+    }
+}
+#endif
+
 #if (defined WIN32 && defined __MINGW32__) || defined(__CYGWIN__)
 CARD32
 GetTimeInMillis(void)
@@ -446,7 +457,6 @@ GetTimeInMillis(void)
 
 #ifdef MONOTONIC_CLOCK
     struct timespec tp;
-    static clockid_t clockid;
 
     if (!clockid) {
 #ifdef CLOCK_MONOTONIC_COARSE
@@ -475,43 +485,22 @@ GetTimeInMicros(void)
     struct timeval tv;
 #ifdef MONOTONIC_CLOCK
     struct timespec tp;
-    static clockid_t clockid;
+    static clockid_t uclockid;
 
-    if (!clockid) {
+    if (!uclockid) {
         if (clock_gettime(CLOCK_MONOTONIC, &tp) == 0)
-            clockid = CLOCK_MONOTONIC;
+            uclockid = CLOCK_MONOTONIC;
         else
-            clockid = ~0L;
+            uclockid = ~0L;
     }
-    if (clockid != ~0L && clock_gettime(clockid, &tp) == 0)
+    if (uclockid != ~0L && clock_gettime(uclockid, &tp) == 0)
         return (CARD64) tp.tv_sec * (CARD64)1000000 + tp.tv_nsec / 1000;
 #endif
 
     X_GETTIMEOFDAY(&tv);
-    return (CARD64) tv.tv_sec * (CARD64)1000000000 + (CARD64) tv.tv_usec * 1000;
+    return (CARD64) tv.tv_sec * (CARD64)1000000 + (CARD64) tv.tv_usec;
 }
 #endif
-
-void
-AdjustWaitForDelay(void *waitTime, unsigned long newdelay)
-{
-    static struct timeval delay_val;
-    struct timeval **wt = (struct timeval **) waitTime;
-    unsigned long olddelay;
-
-    if (*wt == NULL) {
-        delay_val.tv_sec = newdelay / 1000;
-        delay_val.tv_usec = 1000 * (newdelay % 1000);
-        *wt = &delay_val;
-    }
-    else {
-        olddelay = (*wt)->tv_sec * 1000 + (*wt)->tv_usec / 1000;
-        if (newdelay < olddelay) {
-            (*wt)->tv_sec = newdelay / 1000;
-            (*wt)->tv_usec = 1000 * (newdelay % 1000);
-        }
-    }
-}
 
 void
 UseMsg(void)
@@ -556,6 +545,7 @@ UseMsg(void)
 #ifdef LOCK_SERVER
     ErrorF("-nolock                disable the locking mechanism\n");
 #endif
+    ErrorF("-maxclients n          set maximum number of clients (power of two)\n");
     ErrorF("-nolisten string       don't listen on protocol\n");
     ErrorF("-listen string         listen on protocol\n");
     ErrorF("-noreset               don't reset after last client exists\n");
@@ -585,7 +575,7 @@ UseMsg(void)
     ErrorF("-xinerama              Disable XINERAMA extension\n");
 #endif
     ErrorF
-        ("-dumbSched             Disable smart scheduling, enable old behavior\n");
+        ("-dumbSched             Disable smart scheduling and threaded input, enable old behavior\n");
     ErrorF("-schedInterval int     Set scheduler interval in msec\n");
     ErrorF("-sigstop               Enable SIGSTOP based startup\n");
     ErrorF("+extension name        Enable extension\n");
@@ -781,7 +771,7 @@ ProcessCommandLine(int argc, char *argv[])
             DPMSDisabledSwitch = TRUE;
 #endif
         else if (strcmp(argv[i], "-deferglyphs") == 0) {
-            if (++i >= argc || !ParseGlyphCachingMode(argv[i]))
+            if (++i >= argc || !xfont2_parse_glyph_caching_mode(argv[i]))
                 UseMsg();
         }
         else if (strcmp(argv[i], "-f") == 0) {
@@ -864,6 +854,21 @@ ProcessCommandLine(int argc, char *argv[])
                 nolock = TRUE;
         }
 #endif
+	else if ( strcmp( argv[i], "-maxclients") == 0)
+	{
+	    if (++i < argc) {
+		LimitClients = atoi(argv[i]);
+		if (LimitClients != 64 &&
+		    LimitClients != 128 &&
+		    LimitClients != 256 &&
+		    LimitClients != 512 &&
+                    LimitClients != 1024 &&
+                    LimitClients != 2048) {
+		    FatalError("maxclients must be one of 64, 128, 256, 512, 1024 or 2048\n");
+		}
+	    } else
+		UseMsg();
+	}
         else if (strcmp(argv[i], "-nolisten") == 0) {
             if (++i < argc) {
                 if (_XSERVTransNoListen(argv[i]))
@@ -994,9 +999,11 @@ ProcessCommandLine(int argc, char *argv[])
             i = skip - 1;
         }
 #endif
-#ifdef SMART_SCHEDULE_POSSIBLE
         else if (strcmp(argv[i], "-dumbSched") == 0) {
-            SmartScheduleDisable = TRUE;
+            InputThreadEnable = FALSE;
+#ifdef HAVE_SETITIMER
+            SmartScheduleSignalEnable = FALSE;
+#endif
         }
         else if (strcmp(argv[i], "-schedInterval") == 0) {
             if (++i < argc) {
@@ -1013,7 +1020,6 @@ ProcessCommandLine(int argc, char *argv[])
             else
                 UseMsg();
         }
-#endif
         else if (strcmp(argv[i], "-render") == 0) {
             if (++i < argc) {
                 int policy = PictureParseCmapPolicy(argv[i]);
@@ -1059,7 +1065,7 @@ int
 set_font_authorizations(char **authorizations, int *authlen, void *client)
 {
 #define AUTHORIZATION_NAME "hp-hostname-1"
-#if defined(TCPCONN) || defined(STREAMSCONN)
+#if defined(TCPCONN)
     static char *result = NULL;
     static char *p = NULL;
 
@@ -1132,10 +1138,20 @@ XNFalloc(unsigned long amount)
     return ptr;
 }
 
+/* The original XNFcalloc was used with the xnfcalloc macro which multiplied
+ * the arguments at the call site without allowing calloc to check for overflow.
+ * XNFcallocarray was added to fix that without breaking ABI.
+ */
 void *
 XNFcalloc(unsigned long amount)
 {
-    void *ret = calloc(1, amount);
+    return XNFcallocarray(1, amount);
+}
+
+void *
+XNFcallocarray(size_t nmemb, size_t size)
+{
+    void *ret = calloc(nmemb, size);
 
     if (!ret)
         FatalError("XNFcalloc: Out of memory");
@@ -1149,6 +1165,16 @@ XNFrealloc(void *ptr, unsigned long amount)
 
     if (!ret)
         FatalError("XNFrealloc: Out of memory");
+    return ret;
+}
+
+void *
+XNFreallocarray(void *ptr, size_t nmemb, size_t size)
+{
+    void *ret = reallocarray(ptr, nmemb, size);
+
+    if (!ret)
+        FatalError("XNFreallocarray: Out of memory");
     return ret;
 }
 
@@ -1177,10 +1203,10 @@ XNFstrdup(const char *s)
 void
 SmartScheduleStopTimer(void)
 {
-#ifdef SMART_SCHEDULE_POSSIBLE
+#ifdef HAVE_SETITIMER
     struct itimerval timer;
 
-    if (SmartScheduleDisable)
+    if (!SmartScheduleSignalEnable)
         return;
     timer.it_interval.tv_sec = 0;
     timer.it_interval.tv_usec = 0;
@@ -1193,10 +1219,10 @@ SmartScheduleStopTimer(void)
 void
 SmartScheduleStartTimer(void)
 {
-#ifdef SMART_SCHEDULE_POSSIBLE
+#ifdef HAVE_SETITIMER
     struct itimerval timer;
 
-    if (SmartScheduleDisable)
+    if (!SmartScheduleSignalEnable)
         return;
     timer.it_interval.tv_sec = 0;
     timer.it_interval.tv_usec = SmartScheduleInterval * 1000;
@@ -1206,6 +1232,7 @@ SmartScheduleStartTimer(void)
 #endif
 }
 
+#ifdef HAVE_SETITIMER
 static void
 SmartScheduleTimer(int sig)
 {
@@ -1216,10 +1243,9 @@ static int
 SmartScheduleEnable(void)
 {
     int ret = 0;
-#ifdef SMART_SCHEDULE_POSSIBLE
     struct sigaction act;
 
-    if (SmartScheduleDisable)
+    if (!SmartScheduleSignalEnable)
         return 0;
 
     memset((char *) &act, 0, sizeof(struct sigaction));
@@ -1230,7 +1256,6 @@ SmartScheduleEnable(void)
     sigemptyset(&act.sa_mask);
     sigaddset(&act.sa_mask, SIGALRM);
     ret = sigaction(SIGALRM, &act, 0);
-#endif
     return ret;
 }
 
@@ -1238,10 +1263,9 @@ static int
 SmartSchedulePause(void)
 {
     int ret = 0;
-#ifdef SMART_SCHEDULE_POSSIBLE
     struct sigaction act;
 
-    if (SmartScheduleDisable)
+    if (!SmartScheduleSignalEnable)
         return 0;
 
     memset((char *) &act, 0, sizeof(struct sigaction));
@@ -1249,20 +1273,19 @@ SmartSchedulePause(void)
     act.sa_handler = SIG_IGN;
     sigemptyset(&act.sa_mask);
     ret = sigaction(SIGALRM, &act, 0);
-#endif
     return ret;
 }
+#endif
 
 void
 SmartScheduleInit(void)
 {
-    if (SmartScheduleDisable)
-        return;
-
+#ifdef HAVE_SETITIMER
     if (SmartScheduleEnable() < 0) {
         perror("sigaction for smart scheduler");
-        SmartScheduleDisable = TRUE;
+        SmartScheduleSignalEnable = FALSE;
     }
+#endif
 }
 
 #ifdef SIG_BLOCK
@@ -1277,9 +1300,6 @@ OsBlockSignals(void)
     if (BlockedSignalCount++ == 0) {
         sigset_t set;
 
-#ifdef SIGIO
-        OsBlockSIGIO();
-#endif
         sigemptyset(&set);
         sigaddset(&set, SIGALRM);
         sigaddset(&set, SIGVTALRM);
@@ -1290,52 +1310,8 @@ OsBlockSignals(void)
         sigaddset(&set, SIGTTIN);
         sigaddset(&set, SIGTTOU);
         sigaddset(&set, SIGCHLD);
-        sigprocmask(SIG_BLOCK, &set, &PreviousSignalMask);
+        xthread_sigmask(SIG_BLOCK, &set, &PreviousSignalMask);
     }
-#endif
-}
-
-#ifdef SIG_BLOCK
-static sig_atomic_t sigio_blocked;
-static sigset_t PreviousSigIOMask;
-#endif
-
-/**
- * returns zero if this call caused SIGIO to be blocked now, non-zero if it
- * was already blocked by a previous call to this function.
- */
-int
-OsBlockSIGIO(void)
-{
-#ifdef SIGIO
-#ifdef SIG_BLOCK
-    if (sigio_blocked++ == 0) {
-        sigset_t set;
-        int ret;
-
-        sigemptyset(&set);
-        sigaddset(&set, SIGIO);
-        sigprocmask(SIG_BLOCK, &set, &PreviousSigIOMask);
-        ret = sigismember(&PreviousSigIOMask, SIGIO);
-        return ret;
-    }
-#endif
-#endif
-    return 1;
-}
-
-void
-OsReleaseSIGIO(void)
-{
-#ifdef SIGIO
-#ifdef SIG_BLOCK
-    if (--sigio_blocked == 0) {
-        sigprocmask(SIG_SETMASK, &PreviousSigIOMask, 0);
-    } else if (sigio_blocked < 0) {
-        BUG_WARN(sigio_blocked < 0);
-        sigio_blocked = 0;
-    }
-#endif
 #endif
 }
 
@@ -1344,8 +1320,7 @@ OsReleaseSignals(void)
 {
 #ifdef SIG_BLOCK
     if (--BlockedSignalCount == 0) {
-        sigprocmask(SIG_SETMASK, &PreviousSignalMask, 0);
-        OsReleaseSIGIO();
+        xthread_sigmask(SIG_SETMASK, &PreviousSignalMask, 0);
     }
 #endif
 }
@@ -1356,10 +1331,7 @@ OsResetSignals(void)
 #ifdef SIG_BLOCK
     while (BlockedSignalCount > 0)
         OsReleaseSignals();
-#ifdef SIGIO
-    while (sigio_blocked > 0)
-        OsReleaseSIGIO();
-#endif
+    input_force_unlock();
 #endif
 }
 
@@ -1373,6 +1345,12 @@ OsAbort(void)
 {
 #ifndef __APPLE__
     OsBlockSignals();
+#endif
+#if !defined(WIN32) || defined(__CYGWIN__)
+    /* abort() raises SIGABRT, so we have to stop handling that to prevent
+     * recursion
+     */
+    OsSignal(SIGABRT, SIG_DFL);
 #endif
     abort();
 }
@@ -1398,7 +1376,7 @@ System(const char *command)
     if (!command)
         return 1;
 
-    csig = signal(SIGCHLD, SIG_DFL);
+    csig = OsSignal(SIGCHLD, SIG_DFL);
     if (csig == SIG_ERR) {
         perror("signal");
         return -1;
@@ -1423,7 +1401,7 @@ System(const char *command)
 
     }
 
-    if (signal(SIGCHLD, csig) == SIG_ERR) {
+    if (OsSignal(SIGCHLD, csig) == SIG_ERR) {
         perror("signal");
         return -1;
     }
@@ -1459,6 +1437,7 @@ Popen(const char *command, const char *type)
     }
 
     /* Ignore the smart scheduler while this is going on */
+#ifdef HAVE_SETITIMER
     if (SmartSchedulePause() < 0) {
         close(pdes[0]);
         close(pdes[1]);
@@ -1466,14 +1445,17 @@ Popen(const char *command, const char *type)
         perror("signal");
         return NULL;
     }
+#endif
 
     switch (pid = fork()) {
     case -1:                   /* error */
         close(pdes[0]);
         close(pdes[1]);
         free(cur);
+#ifdef HAVE_SETITIMER
         if (SmartScheduleEnable() < 0)
             perror("signal");
+#endif
         return NULL;
     case 0:                    /* child */
         if (setgid(getgid()) == -1)
@@ -1647,10 +1629,12 @@ Pclose(void *iop)
     /* allow EINTR again */
     OsReleaseSignals();
 
+#ifdef HAVE_SETITIMER
     if (SmartScheduleEnable() < 0) {
         perror("signal");
         return -1;
     }
+#endif
 
     return pid == -1 ? -1 : pstat;
 }
@@ -1672,7 +1656,7 @@ Fclose(void *iop)
 #include <X11/Xwindows.h>
 
 const char *
-Win32TempDir()
+Win32TempDir(void)
 {
     static char buffer[PATH_MAX];
 
@@ -1739,6 +1723,69 @@ System(const char *cmdline)
     return dwExitCode;
 }
 #endif
+
+Bool
+PrivsElevated(void)
+{
+    static Bool privsTested = FALSE;
+    static Bool privsElevated = TRUE;
+
+    if (!privsTested) {
+#if defined(WIN32)
+        privsElevated = FALSE;
+#else
+        if ((getuid() != geteuid()) || (getgid() != getegid())) {
+            privsElevated = TRUE;
+        }
+        else {
+#if defined(HAVE_ISSETUGID)
+            privsElevated = issetugid();
+#elif defined(HAVE_GETRESUID)
+            uid_t ruid, euid, suid;
+            gid_t rgid, egid, sgid;
+
+            if ((getresuid(&ruid, &euid, &suid) == 0) &&
+                (getresgid(&rgid, &egid, &sgid) == 0)) {
+                privsElevated = (euid != suid) || (egid != sgid);
+            }
+            else {
+                printf("Failed getresuid or getresgid");
+                /* Something went wrong, make defensive assumption */
+                privsElevated = TRUE;
+            }
+#else
+            if (getuid() == 0) {
+                /* running as root: uid==euid==0 */
+                privsElevated = FALSE;
+            }
+            else {
+                /*
+                 * If there are saved ID's the process might still be privileged
+                 * even though the above test succeeded. If issetugid() and
+                 * getresgid() aren't available, test this by trying to set
+                 * euid to 0.
+                 */
+                unsigned int oldeuid;
+
+                oldeuid = geteuid();
+
+                if (seteuid(0) != 0) {
+                    privsElevated = FALSE;
+                }
+                else {
+                    if (seteuid(oldeuid) != 0) {
+                        FatalError("Failed to drop privileges.  Exiting\n");
+                    }
+                    privsElevated = TRUE;
+                }
+            }
+#endif
+        }
+#endif
+        privsTested = TRUE;
+    }
+    return privsElevated;
+}
 
 /*
  * CheckUserParameters: check for long command line arguments and long
@@ -1821,7 +1868,7 @@ CheckUserParameters(int argc, char **argv, char **envp)
     char *a, *e = NULL;
 
 #if CHECK_EUID
-    if (geteuid() == 0 && getuid() != geteuid())
+    if (PrivsElevated())
 #endif
     {
         /* Check each argv[] */
@@ -2013,7 +2060,7 @@ xstrtokenize(const char *str, const char *separators)
     if (!tmp)
         goto error;
     for (tok = strtok(tmp, separators); tok; tok = strtok(NULL, separators)) {
-        nlist = realloc(list, (num + 2) * sizeof(*list));
+        nlist = reallocarray(list, num + 2, sizeof(*list));
         if (!nlist)
             goto error;
         list = nlist;

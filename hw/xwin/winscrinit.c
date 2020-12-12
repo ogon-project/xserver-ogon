@@ -89,8 +89,8 @@ winScreenInit(ScreenPtr pScreen, int argc, char **argv)
     DWORD dwInitialBPP;
 
 #if CYGDEBUG || YES
-    winDebug("winScreenInit - dwWidth: %ld dwHeight: %ld\n",
-             pScreenInfo->dwWidth, pScreenInfo->dwHeight);
+    winDebug("winScreenInit - dwWidth: %u dwHeight: %u\n",
+             (unsigned int)pScreenInfo->dwWidth, (unsigned int)pScreenInfo->dwHeight);
 #endif
 
     /* Allocate privates for this screen */
@@ -216,15 +216,19 @@ winScreenInit(ScreenPtr pScreen, int argc, char **argv)
     else
         winErrorFVerb(2, "winScreenInit - Using software cursor\n");
 
-    /*
-       Note the screen origin in a normalized coordinate space where (0,0) is at the top left
-       of the native virtual desktop area
-     */
-    pScreen->x = pScreenInfo->dwInitialX - GetSystemMetrics(SM_XVIRTUALSCREEN);
-    pScreen->y = pScreenInfo->dwInitialY - GetSystemMetrics(SM_YVIRTUALSCREEN);
+    if (!noPanoramiXExtension) {
+        /*
+           Note the screen origin in a normalized coordinate space where (0,0) is at the top left
+           of the native virtual desktop area
+         */
+        pScreen->x =
+            pScreenInfo->dwInitialX - GetSystemMetrics(SM_XVIRTUALSCREEN);
+        pScreen->y =
+            pScreenInfo->dwInitialY - GetSystemMetrics(SM_YVIRTUALSCREEN);
 
-    ErrorF("Screen %d added at virtual desktop coordinate (%d,%d).\n",
-           pScreen->myNum, pScreen->x, pScreen->y);
+        ErrorF("Screen %d added at virtual desktop coordinate (%d,%d).\n",
+               pScreen->myNum, pScreen->x, pScreen->y);
+    }
 
 #if CYGDEBUG || YES
     winDebug("winScreenInit - returning\n");
@@ -260,9 +264,7 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
     winScreenInfo *pScreenInfo = pScreenPriv->pScreenInfo;
     VisualPtr pVisual = NULL;
 
-#if defined(XWIN_CLIPBOARD) || defined(XWIN_MULTIWINDOW)
     int iReturn;
-#endif
 
     /* Create framebuffer */
     if (!(*pScreenPriv->pwinInitScreen) (pScreen)) {
@@ -309,8 +311,6 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
     if (pScreenInfo->dwDepth == 8
         && (pScreenInfo->dwEngine == WIN_SERVER_SHADOW_GDI
             || (pScreenInfo->dwEngine == WIN_SERVER_SHADOW_DDNL
-                && pScreenInfo->fFullScreen)
-            || (pScreenInfo->dwEngine == WIN_SERVER_SHADOW_DD
                 && pScreenInfo->fFullScreen))) {
         winSetColormapFunctions(pScreen);
 
@@ -384,7 +384,6 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
 
     /* Initialize the shadow framebuffer layer */
     if ((pScreenInfo->dwEngine == WIN_SERVER_SHADOW_GDI
-         || pScreenInfo->dwEngine == WIN_SERVER_SHADOW_DD
          || pScreenInfo->dwEngine == WIN_SERVER_SHADOW_DDNL)
 #ifdef XWIN_MULTIWINDOWEXTWM
         && !pScreenInfo->fMWExtWM
@@ -454,7 +453,6 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
 #undef WRAP
     }
 
-#ifdef XWIN_MULTIWINDOW
     /* Handle multi window mode */
     else if (pScreenInfo->fMultiWindow) {
         /* Define the WRAP macro temporarily for local use */
@@ -497,13 +495,11 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
         /* Undefine the WRAP macro, as it is not needed elsewhere */
 #undef WRAP
     }
-#endif
 
     /* Wrap either fb's or shadow's CloseScreen with our CloseScreen */
     pScreenPriv->CloseScreen = pScreen->CloseScreen;
     pScreen->CloseScreen = pScreenPriv->pwinCloseScreen;
 
-#if defined(XWIN_CLIPBOARD) || defined(XWIN_MULTIWINDOW)
     /* Create a mutex for modules in separate threads to wait for */
     iReturn = pthread_mutex_init(&pScreenPriv->pmServerStarted, NULL);
     if (iReturn != 0) {
@@ -522,21 +518,12 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
 
     /* Set the ServerStarted flag to false */
     pScreenPriv->fServerStarted = FALSE;
-#endif
 
 #ifdef XWIN_MULTIWINDOWEXTWM
     pScreenPriv->fRestacking = FALSE;
 #endif
 
-#if defined(XWIN_MULTIWINDOW) || defined(XWIN_MULTIWINDOWEXTWM)
-    if (FALSE
-#ifdef XWIN_MULTIWINDOW
-        || pScreenInfo->fMultiWindow
-#endif
-#ifdef XWIN_MULTIWINDOWEXTWM
-        || pScreenInfo->fInternalWM
-#endif
-        ) {
+    if (pScreenInfo->fMultiWindow) {
 #if CYGDEBUG || YES
         winDebug("winFinishScreenInitFB - Calling winInitWM.\n");
 #endif
@@ -546,16 +533,12 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
                        &pScreenPriv->ptWMProc,
                        &pScreenPriv->ptXMsgProc,
                        &pScreenPriv->pmServerStarted,
-                       pScreenInfo->dwScreen, (HWND) &pScreenPriv->hwndScreen,
-#ifdef XWIN_MULTIWINDOWEXTWM
-                       pScreenInfo->fInternalWM ||
-#endif
-                       FALSE)) {
+                       pScreenInfo->dwScreen,
+                       (HWND) &pScreenPriv->hwndScreen)) {
             ErrorF("winFinishScreenInitFB - winInitWM () failed.\n");
             return FALSE;
         }
     }
-#endif
 
     /* Tell the server that we are enabled */
     pScreenPriv->fEnabled = TRUE;

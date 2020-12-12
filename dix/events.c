@@ -597,6 +597,8 @@ XineramaConfineCursorToWindow(DeviceIntPtr pDev,
 
     int x, y, off_x, off_y, i;
 
+    assert(!noPanoramiXExtension);
+
     if (!XineramaSetWindowPntrs(pDev, pWin))
         return;
 
@@ -882,6 +884,8 @@ ConfineCursorToWindow(DeviceIntPtr pDev, WindowPtr pWin, Bool generateEvents,
         SyntheticMotion(pDev, pSprite->hot.x, pSprite->hot.y);
     }
     else {
+        ScreenPtr pScreen = pWin->drawable.pScreen;
+
 #ifdef PANORAMIX
         if (!noPanoramiXExtension) {
             XineramaConfineCursorToWindow(pDev, pWin, generateEvents);
@@ -893,6 +897,9 @@ ConfineCursorToWindow(DeviceIntPtr pDev, WindowPtr pWin, Bool generateEvents,
             : NullRegion;
         CheckPhysLimits(pDev, pSprite->current, generateEvents,
                         confineToScreen, pWin->drawable.pScreen);
+
+        if (*pScreen->CursorConfinedTo)
+            (*pScreen->CursorConfinedTo) (pDev, pScreen, pWin);
     }
 }
 
@@ -1525,7 +1532,9 @@ ActivatePointerGrab(DeviceIntPtr mouse, GrabPtr grab,
                 mouse->spriteInfo->sprite->hotPhys.y = 0;
         ConfineCursorToWindow(mouse, grab->confineTo, FALSE, TRUE);
     }
-    DoEnterLeaveEvents(mouse, mouse->id, oldWin, grab->window, NotifyGrab);
+    if (! (grabinfo->grab && oldWin == grabinfo->grab->window
+			  && oldWin == grab->window))
+        DoEnterLeaveEvents(mouse, mouse->id, oldWin, grab->window, NotifyGrab);
     mouse->valuator->motionHintWindow = NullWindow;
     if (syncEvents.playingEvents)
         grabinfo->grabTime = syncEvents.time;
@@ -1635,7 +1644,9 @@ ActivateKeyboardGrab(DeviceIntPtr keybd, GrabPtr grab, TimeStamp time,
         oldWin = keybd->focus->win;
     if (keybd->valuator)
         keybd->valuator->motionHintWindow = NullWindow;
-    if (oldWin)
+    if (oldWin &&
+	! (grabinfo->grab && oldWin == grabinfo->grab->window
+			  && oldWin == grab->window))
         DoFocusEvents(keybd, oldWin, grab->window, NotifyGrab);
     if (syncEvents.playingEvents)
         grabinfo->grabTime = syncEvents.time;
@@ -1822,6 +1833,7 @@ ProcAllowEvents(ClientPtr client)
     REQUEST(xAllowEventsReq);
 
     REQUEST_SIZE_MATCH(xAllowEventsReq);
+    UpdateCurrentTime();
     time = ClientTimeToServerTime(stuff->time);
 
     mouse = PickPointer(client);
@@ -2891,7 +2903,7 @@ ActivateFocusInGrab(DeviceIntPtr dev, WindowPtr old, WindowPtr win)
 
     if (dev->deviceGrab.grab) {
         if (!dev->deviceGrab.fromPassiveGrab ||
-            dev->deviceGrab.grab->type != XI_Enter ||
+            dev->deviceGrab.grab->type != XI_FocusIn ||
             dev->deviceGrab.grab->window == win ||
             IsParent(dev->deviceGrab.grab->window, win))
             return FALSE;
@@ -2914,7 +2926,7 @@ ActivateFocusInGrab(DeviceIntPtr dev, WindowPtr old, WindowPtr win)
     rc = (CheckPassiveGrabsOnWindow(win, dev, (InternalEvent *) &event, FALSE,
                                     TRUE) != NULL);
     if (rc)
-        DoEnterLeaveEvents(dev, dev->id, old, win, XINotifyPassiveUngrab);
+        DoEnterLeaveEvents(dev, dev->id, old, win, XINotifyPassiveGrab);
     return rc;
 }
 
@@ -3569,7 +3581,7 @@ ProcWarpPointer(ClientPtr client)
              winX + stuff->srcX + (int) stuff->srcWidth < x) ||
             (stuff->srcHeight != 0 &&
              winY + stuff->srcY + (int) stuff->srcHeight < y) ||
-            !PointInWindowIsVisible(source, x, y))
+            (source->parent && !PointInWindowIsVisible(source, x, y)))
             return Success;
     }
     if (dest) {
@@ -3608,6 +3620,9 @@ ProcWarpPointer(ClientPtr client)
     else if (!PointerConfinedToScreen(dev)) {
         NewCurrentScreen(dev, newScreen, x, y);
     }
+    if (*newScreen->CursorWarpedTo)
+        (*newScreen->CursorWarpedTo) (dev, newScreen, client,
+                                      dest, pSprite, x, y);
     return Success;
 }
 
@@ -4786,8 +4801,8 @@ SetInputFocus(ClientPtr client,
             depth++;
         if (depth > focus->traceSize) {
             focus->traceSize = depth + 1;
-            focus->trace = realloc(focus->trace,
-                                   focus->traceSize * sizeof(WindowPtr));
+            focus->trace = reallocarray(focus->trace, focus->traceSize,
+                                        sizeof(WindowPtr));
         }
         focus->traceGood = depth;
         for (pWin = focusWin, depth--; pWin; pWin = pWin->parent, depth--)
@@ -4952,6 +4967,7 @@ ProcChangeActivePointerGrab(ClientPtr client)
         return Success;
     if (!SameClient(grab, client))
         return Success;
+    UpdateCurrentTime();
     time = ClientTimeToServerTime(stuff->time);
     if ((CompareTimeStamps(time, currentTime) == LATER) ||
         (CompareTimeStamps(time, device->deviceGrab.grabTime) == EARLIER))
@@ -5132,6 +5148,7 @@ ProcGrabKeyboard(ClientPtr client)
     GrabMask mask;
 
     REQUEST_SIZE_MATCH(xGrabKeyboardReq);
+    UpdateCurrentTime();
 
     mask.core = KeyPressMask | KeyReleaseMask;
 
@@ -5355,6 +5372,12 @@ ProcSendEvent(ClientPtr client)
         client->errorValue = stuff->event.u.u.type;
         return BadValue;
     }
+    /* Generic events can have variable size, but SendEvent request holds
+       exactly 32B of event data. */
+    if (stuff->event.u.u.type == GenericEvent) {
+        client->errorValue = stuff->event.u.u.type;
+        return BadValue;
+    }
     if (stuff->event.u.u.type == ClientMessage &&
         stuff->event.u.u.detail != 8 &&
         stuff->event.u.u.detail != 16 && stuff->event.u.u.detail != 32) {
@@ -5544,6 +5567,7 @@ ProcGrabButton(ClientPtr client)
     int rc;
 
     REQUEST_SIZE_MATCH(xGrabButtonReq);
+    UpdateCurrentTime();
     if ((stuff->pointerMode != GrabModeSync) &&
         (stuff->pointerMode != GrabModeAsync)) {
         client->errorValue = stuff->pointerMode;
@@ -5632,6 +5656,7 @@ ProcUngrabButton(ClientPtr client)
     DeviceIntPtr ptr;
 
     REQUEST_SIZE_MATCH(xUngrabButtonReq);
+    UpdateCurrentTime();
     if ((stuff->modifiers != AnyModifier) &&
         (stuff->modifiers & ~AllModifiersMask)) {
         client->errorValue = stuff->modifiers;

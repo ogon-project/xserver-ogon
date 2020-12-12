@@ -62,9 +62,8 @@ __glXDisp_FeedbackBuffer(__GLXclientState * cl, GLbyte * pc)
     size = *(GLsizei *) (pc + 0);
     type = *(GLenum *) (pc + 4);
     if (cx->feedbackBufSize < size) {
-        cx->feedbackBuf = (GLfloat *) realloc(cx->feedbackBuf,
-                                              (size_t) size
-                                              * __GLX_SIZE_FLOAT32);
+        cx->feedbackBuf = reallocarray(cx->feedbackBuf,
+                                       (size_t) size, __GLX_SIZE_FLOAT32);
         if (!cx->feedbackBuf) {
             cl->client->errorValue = size;
             return BadAlloc;
@@ -72,7 +71,6 @@ __glXDisp_FeedbackBuffer(__GLXclientState * cl, GLbyte * pc)
         cx->feedbackBufSize = size;
     }
     glFeedbackBuffer(size, type, cx->feedbackBuf);
-    cx->hasUnflushedCommands = GL_TRUE;
     return Success;
 }
 
@@ -94,8 +92,8 @@ __glXDisp_SelectBuffer(__GLXclientState * cl, GLbyte * pc)
     pc += __GLX_SINGLE_HDR_SIZE;
     size = *(GLsizei *) (pc + 0);
     if (cx->selectBufSize < size) {
-        cx->selectBuf = (GLuint *) realloc(cx->selectBuf,
-                                           (size_t) size * __GLX_SIZE_CARD32);
+        cx->selectBuf = reallocarray(cx->selectBuf,
+                                     (size_t) size, __GLX_SIZE_CARD32);
         if (!cx->selectBuf) {
             cl->client->errorValue = size;
             return BadAlloc;
@@ -103,7 +101,6 @@ __glXDisp_SelectBuffer(__GLXclientState * cl, GLbyte * pc)
         cx->selectBufSize = size;
     }
     glSelectBuffer(size, cx->selectBuf);
-    cx->hasUnflushedCommands = GL_TRUE;
     return Success;
 }
 
@@ -226,7 +223,6 @@ __glXDisp_Flush(__GLXclientState * cl, GLbyte * pc)
     }
 
     glFlush();
-    cx->hasUnflushedCommands = GL_FALSE;
     return Success;
 }
 
@@ -236,6 +232,7 @@ __glXDisp_Finish(__GLXclientState * cl, GLbyte * pc)
     ClientPtr client = cl->client;
     __GLXcontext *cx;
     int error;
+    xGLXSingleReply reply = { 0, };
 
     REQUEST_SIZE_MATCH(xGLXSingleReq);
 
@@ -246,7 +243,6 @@ __glXDisp_Finish(__GLXclientState * cl, GLbyte * pc)
 
     /* Do a local glFinish */
     glFinish();
-    cx->hasUnflushedCommands = GL_FALSE;
 
     /* Send empty reply packet to indicate finish is finished */
     client = cl->client;
@@ -257,7 +253,7 @@ __glXDisp_Finish(__GLXclientState * cl, GLbyte * pc)
 
 #define SEPARATOR " "
 
-char *
+static char *
 __glXcombine_strings(const char *cext_string, const char *sext_string)
 {
     size_t clen, slen;
@@ -333,6 +329,7 @@ DoGetString(__GLXclientState * cl, GLbyte * pc, GLboolean need_swap)
     __GLXcontext *cx;
     GLenum name;
     const char *string;
+    xGLXSingleReply reply = { 0, };
 
     __GLX_DECLARE_SWAP_VARIABLES;
     int error;

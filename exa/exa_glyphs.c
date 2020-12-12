@@ -211,8 +211,8 @@ exaRealizeGlyphCaches(ScreenPtr pScreen, unsigned int format)
 
         cache->picture = pPicture;
         cache->picture->refcnt++;
-        cache->hashEntries = malloc(sizeof(int) * cache->hashSize);
-        cache->glyphs = malloc(sizeof(ExaCachedGlyphRec) * cache->size);
+        cache->hashEntries = xallocarray(cache->hashSize, sizeof(int));
+        cache->glyphs = xallocarray(cache->size, sizeof(ExaCachedGlyphRec));
         cache->glyphCount = 0;
 
         if (!cache->hashEntries || !cache->glyphs)
@@ -618,9 +618,9 @@ exaGlyphsToMask(PicturePtr pMask, ExaGlyphBufferPtr buffer)
 }
 
 static void
-exaGlyphsToDst(PicturePtr pSrc, PicturePtr pDst, ExaGlyphBufferPtr buffer)
+exaGlyphsToDst(CARD8 op, PicturePtr pSrc, PicturePtr pDst, ExaGlyphBufferPtr buffer)
 {
-    exaCompositeRects(PictOpOver, pSrc, buffer->mask, pDst, buffer->count,
+    exaCompositeRects(op, pSrc, buffer->mask, pDst, buffer->count,
                       buffer->rects);
 
     buffer->count = 0;
@@ -801,7 +801,7 @@ exaGlyphs(CARD8 op,
                                        0, 0, x - glyph->info.x,
                                        y - glyph->info.y)
                         == ExaGlyphNeedFlush) {
-                        exaGlyphsToDst(pSrc, pDst, &buffer);
+                        exaGlyphsToDst(op, pSrc, pDst, &buffer);
                         exaBufferGlyph(pScreen, &buffer, glyph, pSrc, pDst,
                                        xSrc + (x - glyph->info.x) - first_xOff,
                                        ySrc + (y - glyph->info.y) - first_yOff,
@@ -821,7 +821,7 @@ exaGlyphs(CARD8 op,
         if (maskFormat)
             exaGlyphsToMask(pMask, &buffer);
         else
-            exaGlyphsToDst(pSrc, pDst, &buffer);
+            exaGlyphsToDst(op, pSrc, pDst, &buffer);
     }
 
     if (maskFormat) {

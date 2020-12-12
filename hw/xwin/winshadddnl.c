@@ -200,8 +200,10 @@ winAllocateFBShadowDDNL(ScreenPtr pScreen)
     DDPIXELFORMAT ddpfPrimary;
 
 #if CYGDEBUG
-    winDebug("winAllocateFBShadowDDNL - w %d h %d d %d\n",
-             pScreenInfo->dwWidth, pScreenInfo->dwHeight, pScreenInfo->dwDepth);
+    winDebug("winAllocateFBShadowDDNL - w %u h %u d %u\n",
+             (unsigned int)pScreenInfo->dwWidth,
+             (unsigned int)pScreenInfo->dwHeight,
+             (unsigned int)pScreenInfo->dwDepth);
 #endif
 
     /* Set the padded screen width */
@@ -400,10 +402,11 @@ winAllocateFBShadowDDNL(ScreenPtr pScreen)
 
 #if CYGDEBUG
     winDebug("winAllocateFBShadowDDNL - Primary masks: %08x %08x %08x "
-             "dwRGBBitCount: %d\n",
-             ddpfPrimary.u2.dwRBitMask,
-             ddpfPrimary.u3.dwGBitMask,
-             ddpfPrimary.u4.dwBBitMask, ddpfPrimary.u1.dwRGBBitCount);
+             "dwRGBBitCount: %u\n",
+             (unsigned int)ddpfPrimary.u2.dwRBitMask,
+             (unsigned int)ddpfPrimary.u3.dwGBitMask,
+             (unsigned int)ddpfPrimary.u4.dwBBitMask,
+             (unsigned int)ddpfPrimary.u1.dwRGBBitCount);
 #endif
 
     /* Describe the shadow surface to be created */
@@ -517,7 +520,7 @@ winShadowUpdateDDNL(ScreenPtr pScreen, shadowBufPtr pBuf)
 {
     winScreenPriv(pScreen);
     winScreenInfo *pScreenInfo = pScreenPriv->pScreenInfo;
-    RegionPtr damage = shadowDamage(pBuf);
+    RegionPtr damage = DamageRegion(pBuf->pDamage);
     HRESULT ddrval = DD_OK;
     RECT rcDest, rcSrc;
     POINT ptOrigin;
@@ -655,7 +658,7 @@ winCloseScreenShadowDDNL(ScreenPtr pScreen)
 {
     winScreenPriv(pScreen);
     winScreenInfo *pScreenInfo = pScreenPriv->pScreenInfo;
-    Bool fReturn;
+    Bool fReturn = TRUE;
 
 #if CYGDEBUG
     winDebug("winCloseScreenShadowDDNL - Freeing screen resources\n");
@@ -694,10 +697,8 @@ winCloseScreenShadowDDNL(ScreenPtr pScreen)
         pScreenPriv->hwndScreen = NULL;
     }
 
-#if defined(XWIN_CLIPBOARD) || defined(XWIN_MULTIWINDOW)
     /* Destroy the thread startup mutex */
     pthread_mutex_destroy(&pScreenPriv->pmServerStarted);
-#endif
 
     /* Kill our screeninfo's pointer to the screen */
     pScreenInfo->pScreen = NULL;
@@ -1208,14 +1209,8 @@ winSetEngineFunctionsShadowDDNL(ScreenPtr pScreen)
     pScreenPriv->pwinStoreColors = winStoreColorsShadowDDNL;
     pScreenPriv->pwinCreateColormap = winCreateColormapShadowDDNL;
     pScreenPriv->pwinDestroyColormap = winDestroyColormapShadowDDNL;
-    pScreenPriv->pwinHotKeyAltTab =
-        (winHotKeyAltTabProcPtr) (void (*)(void)) NoopDDA;
     pScreenPriv->pwinCreatePrimarySurface = winCreatePrimarySurfaceShadowDDNL;
     pScreenPriv->pwinReleasePrimarySurface = winReleasePrimarySurfaceShadowDDNL;
-#ifdef XWIN_MULTIWINDOW
-    pScreenPriv->pwinFinishCreateWindowsWindow
-        = (winFinishCreateWindowsWindowProcPtr) (void (*)(void)) NoopDDA;
-#endif
 
     return TRUE;
 }

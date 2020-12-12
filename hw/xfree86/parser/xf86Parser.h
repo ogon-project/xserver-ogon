@@ -211,7 +211,6 @@ typedef struct {
     const char *dev_ramdac;
     int dev_dacSpeeds[CONF_MAXDACSPEEDS];
     int dev_videoram;
-    unsigned long dev_bios_base;
     unsigned long dev_mem_base;
     unsigned long dev_io_base;
     const char *dev_clockchip;
@@ -259,6 +258,7 @@ typedef struct {
     XF86ConfVideoAdaptorPtr al_adaptor;
 } XF86ConfAdaptorLinkRec, *XF86ConfAdaptorLinkPtr;
 
+#define CONF_MAXGPUDEVICES 4
 typedef struct {
     GenericListRec list;
     const char *scrn_identifier;
@@ -276,6 +276,10 @@ typedef struct {
     char *scrn_comment;
     int scrn_virtualX, scrn_virtualY;
     char *match_seat;
+
+    int num_gpu_devices;
+    const char *scrn_gpu_device_str[CONF_MAXGPUDEVICES];
+    XF86ConfDevicePtr scrn_gpu_devices[CONF_MAXGPUDEVICES];
 } XF86ConfScreenRec, *XF86ConfScreenPtr;
 
 typedef struct {
@@ -301,6 +305,7 @@ typedef struct {
 typedef struct {
     struct xorg_list entry;
     char **values;
+    Bool is_negated;
 } xf86MatchGroup;
 
 typedef struct {
@@ -320,6 +325,7 @@ typedef struct {
     xf86TriState is_pointer;
     xf86TriState is_joystick;
     xf86TriState is_tablet;
+    xf86TriState is_tablet_pad;
     xf86TriState is_touchpad;
     xf86TriState is_touchscreen;
     XF86OptionPtr option_lst;
@@ -330,7 +336,9 @@ typedef struct {
     GenericListRec list;
     char *identifier;
     char *driver;
+    char *modulepath;
     struct xorg_list match_driver;
+    XF86OptionPtr option_lst;
     char *comment;
 } XF86ConfOutputClassRec, *XF86ConfOutputClassPtr;
 
@@ -442,6 +450,7 @@ extern char *xf86openConfigDirFiles(const char *path, const char *cmdline,
 extern void xf86setBuiltinConfig(const char *config[]);
 extern XF86ConfigPtr xf86readConfigFile(void);
 extern void xf86closeConfigFile(void);
+extern XF86ConfigPtr xf86allocateConfig(void);
 extern void xf86freeConfig(XF86ConfigPtr p);
 extern int xf86writeConfigFile(const char *, XF86ConfigPtr);
 extern _X_EXPORT XF86ConfDevicePtr xf86findDevice(const char *ident,

@@ -90,8 +90,6 @@ typedef struct _DRI2Drawable {
     DRI2BufferPtr *buffers;
     int bufferCount;
     unsigned int swapsPending;
-    ClientPtr blockedClient;
-    Bool blockedOnMsc;
     int swap_interval;
     CARD64 swap_count;
     int64_t target_sbc;         /* -1 means no SBC wait outstanding */
@@ -99,6 +97,7 @@ typedef struct _DRI2Drawable {
     CARD64 last_swap_msc;       /* msc at completion of most recent swap */
     CARD64 last_swap_ust;       /* ust at completion of most recent swap */
     int swap_limit;             /* for N-buffering */
+    unsigned blocked[3];
     Bool needInvalidate;
     int prime_id;
     PixmapPtr prime_slave_pixmap;
@@ -139,6 +138,44 @@ typedef struct _DRI2Screen {
 static void
 destroy_buffer(DrawablePtr pDraw, DRI2BufferPtr buffer, int prime_id);
 
+enum DRI2WakeType {
+    WAKE_SBC,
+    WAKE_MSC,
+    WAKE_SWAP,
+};
+
+#define Wake(c, t) (void *)((uintptr_t)(c) | (t))
+
+static Bool
+dri2WakeClient(ClientPtr client, void *closure)
+{
+    ClientWakeup(client);
+    return TRUE;
+}
+
+static Bool
+dri2WakeAll(ClientPtr client, DRI2DrawablePtr pPriv, enum DRI2WakeType t)
+{
+    int count;
+
+    if (!pPriv->blocked[t])
+        return FALSE;
+
+    count = ClientSignalAll(client, dri2WakeClient, Wake(pPriv, t));
+    pPriv->blocked[t] -= count;
+    return count;
+}
+
+static Bool
+dri2Sleep(ClientPtr client, DRI2DrawablePtr pPriv, enum DRI2WakeType t)
+{
+    if (ClientSleep(client, dri2WakeClient, Wake(pPriv, t))) {
+        pPriv->blocked[t]++;
+        return TRUE;
+    }
+    return FALSE;
+}
+
 static DRI2ScreenPtr
 DRI2GetScreen(ScreenPtr pScreen)
 {
@@ -149,11 +186,14 @@ static ScreenPtr
 GetScreenPrime(ScreenPtr master, int prime_id)
 {
     ScreenPtr slave;
-    if (prime_id == 0 || xorg_list_is_empty(&master->offload_slave_list)) {
+    if (prime_id == 0) {
         return master;
     }
-    xorg_list_for_each_entry(slave, &master->offload_slave_list, offload_head) {
+    xorg_list_for_each_entry(slave, &master->slave_list, slave_head) {
         DRI2ScreenPtr ds;
+
+        if (!slave->is_offload_slave)
+            continue;
 
         ds = DRI2GetScreen(slave);
         if (ds == NULL)
@@ -210,8 +250,6 @@ DRI2AllocateDrawable(DrawablePtr pDraw)
     pPriv->buffers = NULL;
     pPriv->bufferCount = 0;
     pPriv->swapsPending = 0;
-    pPriv->blockedClient = NULL;
-    pPriv->blockedOnMsc = FALSE;
     pPriv->swap_count = 0;
     pPriv->target_sbc = -1;
     pPriv->swap_interval = 1;
@@ -219,6 +257,7 @@ DRI2AllocateDrawable(DrawablePtr pDraw)
     if (!ds->GetMSC || !(*ds->GetMSC) (pDraw, &ust, &pPriv->last_swap_target))
         pPriv->last_swap_target = 0;
 
+    memset(pPriv->blocked, 0, sizeof(pPriv->blocked));
     pPriv->swap_limit = 1;      /* default to double buffering */
     pPriv->last_swap_msc = 0;
     pPriv->last_swap_ust = 0;
@@ -258,13 +297,7 @@ DRI2SwapLimit(DrawablePtr pDraw, int swap_limit)
     if (pPriv->swapsPending >= pPriv->swap_limit)
         return TRUE;
 
-    if (pPriv->target_sbc == -1 && !pPriv->blockedOnMsc) {
-        if (pPriv->blockedClient) {
-            AttendClient(pPriv->blockedClient);
-            pPriv->blockedClient = NULL;
-        }
-    }
-
+    dri2WakeAll(CLIENT_SIGNAL_ANY, pPriv, WAKE_SWAP);
     return TRUE;
 }
 
@@ -412,6 +445,10 @@ DRI2DrawableGone(void *p, XID id)
         (*pDraw->pScreen->ReplaceScanoutPixmap)(pDraw, pPriv->redirectpixmap, FALSE);
         (*pDraw->pScreen->DestroyPixmap)(pPriv->redirectpixmap);
     }
+
+    dri2WakeAll(CLIENT_SIGNAL_ANY, pPriv, WAKE_SWAP);
+    dri2WakeAll(CLIENT_SIGNAL_ANY, pPriv, WAKE_MSC);
+    dri2WakeAll(CLIENT_SIGNAL_ANY, pPriv, WAKE_SBC);
 
     free(pPriv);
 
@@ -704,24 +741,15 @@ DRI2ThrottleClient(ClientPtr client, DrawablePtr pDraw)
         return FALSE;
 
     /* Throttle to swap limit */
-    if ((pPriv->swapsPending >= pPriv->swap_limit) && !pPriv->blockedClient) {
-        ResetCurrentRequest(client);
-        client->sequence--;
-        IgnoreClient(client);
-        pPriv->blockedClient = client;
-        return TRUE;
+    if (pPriv->swapsPending >= pPriv->swap_limit) {
+        if (dri2Sleep(client, pPriv, WAKE_SWAP)) {
+            ResetCurrentRequest(client);
+            client->sequence--;
+            return TRUE;
+        }
     }
 
     return FALSE;
-}
-
-static void
-__DRI2BlockClient(ClientPtr client, DRI2DrawablePtr pPriv)
-{
-    if (pPriv->blockedClient == NULL) {
-        IgnoreClient(client);
-        pPriv->blockedClient = client;
-    }
 }
 
 void
@@ -733,8 +761,7 @@ DRI2BlockClient(ClientPtr client, DrawablePtr pDraw)
     if (pPriv == NULL)
         return;
 
-    __DRI2BlockClient(client, pPriv);
-    pPriv->blockedOnMsc = TRUE;
+    dri2Sleep(client, pPriv, WAKE_MSC);
 }
 
 static inline PixmapPtr GetDrawablePixmap(DrawablePtr drawable)
@@ -835,6 +862,7 @@ DrawablePtr DRI2UpdatePrime(DrawablePtr pDraw, DRI2BufferPtr pDest)
         if (pPriv->prime_slave_pixmap->master_pixmap == mpix)
             return &pPriv->prime_slave_pixmap->drawable;
         else {
+            PixmapUnshareSlavePixmap(pPriv->prime_slave_pixmap);
             (*pPriv->prime_slave_pixmap->master_pixmap->drawable.pScreen->DestroyPixmap)(pPriv->prime_slave_pixmap->master_pixmap);
             (*slave->DestroyPixmap)(pPriv->prime_slave_pixmap);
             pPriv->prime_slave_pixmap = NULL;
@@ -967,11 +995,7 @@ DRI2WaitMSCComplete(ClientPtr client, DrawablePtr pDraw, int frame,
     ProcDRI2WaitMSCReply(client, ((CARD64) tv_sec * 1000000) + tv_usec,
                          frame, pPriv->swap_count);
 
-    if (pPriv->blockedClient)
-        AttendClient(pPriv->blockedClient);
-
-    pPriv->blockedClient = NULL;
-    pPriv->blockedOnMsc = FALSE;
+    dri2WakeAll(client, pPriv, WAKE_MSC);
 }
 
 static void
@@ -997,19 +1021,14 @@ DRI2WakeClient(ClientPtr client, DrawablePtr pDraw, int frame,
      *   - is not blocked due to an MSC wait
      */
     if (pPriv->target_sbc != -1 && pPriv->target_sbc <= pPriv->swap_count) {
-        ProcDRI2WaitMSCReply(client, ((CARD64) tv_sec * 1000000) + tv_usec,
-                             frame, pPriv->swap_count);
-        pPriv->target_sbc = -1;
-
-        AttendClient(pPriv->blockedClient);
-        pPriv->blockedClient = NULL;
-    }
-    else if (pPriv->target_sbc == -1 && !pPriv->blockedOnMsc) {
-        if (pPriv->blockedClient) {
-            AttendClient(pPriv->blockedClient);
-            pPriv->blockedClient = NULL;
+        if (dri2WakeAll(client, pPriv, WAKE_SBC)) {
+            ProcDRI2WaitMSCReply(client, ((CARD64) tv_sec * 1000000) + tv_usec,
+                                 frame, pPriv->swap_count);
+            pPriv->target_sbc = -1;
         }
     }
+
+    dri2WakeAll(CLIENT_SIGNAL_ANY, pPriv, WAKE_SWAP);
 }
 
 void
@@ -1057,13 +1076,13 @@ DRI2WaitSwap(ClientPtr client, DrawablePtr pDrawable)
     DRI2DrawablePtr pPriv = DRI2GetDrawable(pDrawable);
 
     /* If we're currently waiting for a swap on this drawable, reset
-     * the request and suspend the client.  We only support one
-     * blocked client per drawable. */
-    if (pPriv && pPriv->swapsPending && pPriv->blockedClient == NULL) {
-        ResetCurrentRequest(client);
-        client->sequence--;
-        __DRI2BlockClient(client, pPriv);
-        return TRUE;
+     * the request and suspend the client. */
+    if (pPriv && pPriv->swapsPending) {
+        if (dri2Sleep(client, pPriv, WAKE_SWAP)) {
+            ResetCurrentRequest(client);
+            client->sequence--;
+            return TRUE;
+        }
     }
 
     return FALSE;
@@ -1264,6 +1283,9 @@ DRI2WaitSBC(ClientPtr client, DrawablePtr pDraw, CARD64 target_sbc)
     if (pPriv == NULL)
         return BadDrawable;
 
+    if (pPriv->target_sbc != -1) /* already in use */
+        return BadDrawable;
+
     /* target_sbc == 0 means to block until all pending swaps are
      * finished. Recalculate target_sbc to get that behaviour.
      */
@@ -1280,9 +1302,10 @@ DRI2WaitSBC(ClientPtr client, DrawablePtr pDraw, CARD64 target_sbc)
         return Success;
     }
 
-    pPriv->target_sbc = target_sbc;
-    __DRI2BlockClient(client, pPriv);
+    if (!dri2Sleep(client, pPriv, WAKE_SBC))
+        return BadAlloc;
 
+    pPriv->target_sbc = target_sbc;
     return Success;
 }
 
@@ -1385,8 +1408,7 @@ DRI2ConfigNotify(WindowPtr pWin, int x, int y, int w, int h, int bw,
 static void
 DRI2SetWindowPixmap(WindowPtr pWin, PixmapPtr pPix)
 {
-    DrawablePtr pDraw = (DrawablePtr) pWin;
-    ScreenPtr pScreen = pDraw->pScreen;
+    ScreenPtr pScreen = pWin->drawable.pScreen;
     DRI2ScreenPtr ds = DRI2GetScreen(pScreen);
 
     pScreen->SetWindowPixmap = ds->SetWindowPixmap;
@@ -1394,7 +1416,7 @@ DRI2SetWindowPixmap(WindowPtr pWin, PixmapPtr pPix)
     ds->SetWindowPixmap = pScreen->SetWindowPixmap;
     pScreen->SetWindowPixmap = DRI2SetWindowPixmap;
 
-    DRI2InvalidateDrawableAll(pDraw);
+    DRI2InvalidateDrawable(&pWin->drawable);
 }
 
 #define MAX_PRIME DRI2DriverPrimeMask
@@ -1418,21 +1440,17 @@ get_prime_id(void)
 static char *
 dri2_probe_driver_name(ScreenPtr pScreen, DRI2InfoPtr info)
 {
-    ScrnInfoPtr pScrn = xf86ScreenToScrn(pScreen);
-    EntityInfoPtr pEnt = xf86GetEntityInfo(pScrn->entityList[0]);
-    struct pci_device *pdev = NULL;
+#ifdef WITH_LIBDRM
     int i, j;
+    char *driver = NULL;
+    drmDevicePtr dev;
 
-    if (pEnt)
-        pdev = xf86GetPciInfoForEntity(pEnt->index);
-
-    /* For non-PCI devices, just assume that the 3D driver is named
-     * the same as the kernel driver.  This is currently true for vc4
-     * and msm (freedreno).
+    /* For non-PCI devices and drmGetDevice fail, just assume that
+     * the 3D driver is named the same as the kernel driver. This is
+     * currently true for vc4 and msm (freedreno).
      */
-    if (!pdev) {
+    if (drmGetDevice(info->fd, &dev) || dev->bustype != DRM_BUS_PCI) {
         drmVersionPtr version = drmGetVersion(info->fd);
-        char *kernel_driver;
 
         if (!version) {
             xf86DrvMsg(pScreen->myNum, X_ERROR,
@@ -1441,29 +1459,38 @@ dri2_probe_driver_name(ScreenPtr pScreen, DRI2InfoPtr info)
             return NULL;
         }
 
-        kernel_driver = strndup(version->name, version->name_len);
+        driver = strndup(version->name, version->name_len);
         drmFreeVersion(version);
-        return kernel_driver;
+        return driver;
     }
 
     for (i = 0; driver_map[i].driver; i++) {
-        if (pdev->vendor_id != driver_map[i].vendor_id)
+        if (dev->deviceinfo.pci->vendor_id != driver_map[i].vendor_id)
             continue;
 
-        if (driver_map[i].num_chips_ids == -1)
-            return strdup(driver_map[i].driver);
+        if (driver_map[i].num_chips_ids == -1) {
+             driver = strdup(driver_map[i].driver);
+             goto out;
+        }
 
         for (j = 0; j < driver_map[i].num_chips_ids; j++) {
-            if (driver_map[i].chip_ids[j] == pdev->device_id)
-                return strdup(driver_map[i].driver);
+            if (driver_map[i].chip_ids[j] == dev->deviceinfo.pci->device_id) {
+                driver = strdup(driver_map[i].driver);
+                goto out;
+            }
         }
     }
 
     xf86DrvMsg(pScreen->myNum, X_ERROR,
                "[DRI2] No driver mapping found for PCI device "
                "0x%04x / 0x%04x\n",
-               pdev->vendor_id, pdev->device_id);
+               dev->deviceinfo.pci->vendor_id, dev->deviceinfo.pci->device_id);
+out:
+    drmFreeDevice(&dev);
+    return driver;
+#else
     return NULL;
+#endif
 }
 
 Bool
@@ -1511,6 +1538,7 @@ DRI2ScreenInit(ScreenPtr pScreen, DRI2InfoPtr info)
     ds->CreateBuffer = info->CreateBuffer;
     ds->DestroyBuffer = info->DestroyBuffer;
     ds->CopyRegion = info->CopyRegion;
+    cur_minor = 1;
 
     if (info->version >= 4) {
         ds->ScheduleSwap = info->ScheduleSwap;
@@ -1518,13 +1546,7 @@ DRI2ScreenInit(ScreenPtr pScreen, DRI2InfoPtr info)
         ds->GetMSC = info->GetMSC;
         cur_minor = 3;
     }
-    else {
-        cur_minor = 1;
-    }
 
-    if (info->version >= 8) {
-        ds->AuthMagic = info->AuthMagic2;
-    }
     if (info->version >= 5) {
         ds->LegacyAuthMagic = info->AuthMagic;
     }
@@ -1537,6 +1559,10 @@ DRI2ScreenInit(ScreenPtr pScreen, DRI2InfoPtr info)
     if (info->version >= 7) {
         ds->GetParam = info->GetParam;
         cur_minor = 4;
+    }
+
+    if (info->version >= 8) {
+        ds->AuthMagic = info->AuthMagic2;
     }
 
     if (info->version >= 9) {
@@ -1577,7 +1603,7 @@ DRI2ScreenInit(ScreenPtr pScreen, DRI2InfoPtr info)
     if (info->version == 3 || info->numDrivers == 0) {
         /* Driver too old: use the old-style driverName field */
         ds->numDrivers = info->driverName ? 1 : 2;
-        ds->driverNames = malloc(ds->numDrivers * sizeof(*ds->driverNames));
+        ds->driverNames = xallocarray(ds->numDrivers, sizeof(*ds->driverNames));
         if (!ds->driverNames)
             goto err_out;
 
@@ -1591,7 +1617,7 @@ DRI2ScreenInit(ScreenPtr pScreen, DRI2InfoPtr info)
     }
     else {
         ds->numDrivers = info->numDrivers;
-        ds->driverNames = malloc(info->numDrivers * sizeof(*ds->driverNames));
+        ds->driverNames = xallocarray(info->numDrivers, sizeof(*ds->driverNames));
         if (!ds->driverNames)
             goto err_out;
         memcpy(ds->driverNames, info->driverNames,
@@ -1607,7 +1633,7 @@ DRI2ScreenInit(ScreenPtr pScreen, DRI2InfoPtr info)
     pScreen->SetWindowPixmap = DRI2SetWindowPixmap;
 
     xf86DrvMsg(pScreen->myNum, X_INFO, "[DRI2] Setup complete\n");
-    for (i = 0; i < sizeof(driverTypeNames) / sizeof(driverTypeNames[0]); i++) {
+    for (i = 0; i < ARRAY_SIZE(driverTypeNames); i++) {
         if (i < ds->numDrivers && ds->driverNames[i]) {
             xf86DrvMsg(pScreen->myNum, X_INFO, "[DRI2]   %s driver: %s\n",
                        driverTypeNames[i], ds->driverNames[i]);

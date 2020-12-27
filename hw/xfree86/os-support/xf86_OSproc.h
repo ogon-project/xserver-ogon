@@ -136,6 +136,7 @@ extern _X_EXPORT int xf86GetSerialModemState(int fd);
 extern _X_EXPORT int xf86SerialModemSetBits(int fd, int bits);
 extern _X_EXPORT int xf86SerialModemClearBits(int fd, int bits);
 extern _X_EXPORT int xf86LoadKernelModule(const char *pathname);
+extern _X_EXPORT void xf86OSInputThreadInit(void);
 
 /* AGP GART interface */
 
@@ -169,10 +170,6 @@ extern _X_EXPORT Bool xf86GARTCloseScreen(int screenNum);
 extern _X_EXPORT int xf86InstallSIGIOHandler(int fd, void (*f) (int, void *),
                                              void *);
 extern _X_EXPORT int xf86RemoveSIGIOHandler(int fd);
-extern _X_EXPORT int xf86BlockSIGIO(void);
-extern _X_EXPORT void xf86UnblockSIGIO(int);
-extern _X_EXPORT void xf86AssertBlockedSIGIO(char *);
-extern _X_EXPORT Bool xf86SIGIOSupported(void);
 
 #ifdef XF86_OS_PRIVS
 typedef void (*PMClose) (void);

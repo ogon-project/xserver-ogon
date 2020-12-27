@@ -291,7 +291,10 @@ exaTryDriverSolidFill(PicturePtr pSrc,
         pixel = exaGetPixmapFirstPixel(pSrcPix);
     }
     else
-        pixel = pSrc->pSourcePict->solidFill.color;
+        miRenderColorToPixel(PictureMatchFormat(pDst->pDrawable->pScreen, 32,
+                                                pSrc->format),
+                             &pSrc->pSourcePict->solidFill.fullcolor,
+                             &pixel);
 
     if (!exaGetRGBAFromPixel(pixel, &red, &green, &blue, &alpha,
                              pSrc->pFormat, pSrc->format) ||
@@ -1141,7 +1144,8 @@ exaTrapezoids(CARD8 op, PicturePtr pSrc, PicturePtr pDst,
 
         exaPrepareAccess(pPicture->pDrawable, EXA_PREPARE_DEST);
         for (; ntrap; ntrap--, traps++)
-            (*ps->RasterizeTrapezoid) (pPicture, traps, -bounds.x1, -bounds.y1);
+            if (xTrapezoidValid(traps))
+                (*ps->RasterizeTrapezoid) (pPicture, traps, -bounds.x1, -bounds.y1);
         exaFinishAccess(pPicture->pDrawable, EXA_PREPARE_DEST);
 
         xRel = bounds.x1 + xSrc - xDst;

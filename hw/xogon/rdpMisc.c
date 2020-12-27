@@ -34,15 +34,17 @@
 
 #include <sys/un.h>
 
+/*
 #ifdef DPMSExtension
 #include "dpmsproc.h"
 #endif
+*/
 
 #include "XIstubs.h"
 
 Bool noFontCacheExtension = 1;
 
-/* DPMS */
+/* DPMS
 
 #ifdef DPMSExtension
 
@@ -55,8 +57,8 @@ int DPMSSet(ClientPtr client, int level)
 {
 	return Success;
 }
-
 #endif
+*/
 
 /* XI */
 int SetDeviceMode(ClientPtr client, DeviceIntPtr dev, int mode)

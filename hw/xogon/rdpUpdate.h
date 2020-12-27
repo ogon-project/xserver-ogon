@@ -45,4 +45,9 @@ void rdp_check(void *blockData, int result, void *bitset);
 int rdp_handle_damage_region(int callerId);
 int init_messages_list(void);
 
+void client_incoming(int fd, int ready, void *data);
+void multitouch_incoming(int fd, int ready, void *data);
+void server_incoming(int fd, int ready, void *data);
+void check_message_fds(int fd, int ready, void *data);
+
 #endif /* OGON_X11RDP_UPDATE_H */

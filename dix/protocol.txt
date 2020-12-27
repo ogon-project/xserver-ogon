@@ -149,6 +149,7 @@ R031 GLX:CreateWindow
 R032 GLX:DeleteWindow
 R033 GLX:SetClientInfoARB
 R034 GLX:CreateContextAttribsARB
+R035 GLX:SetClientInfo2ARB
 R101 GLX:NewList
 R102 GLX:EndList
 R103 GLX:DeleteLists
@@ -290,6 +291,9 @@ R038 RANDR:RRConfigureProviderProperty
 R039 RANDR:RRChangeProviderProperty
 R040 RANDR:RRDeleteProviderProperty
 R041 RANDR:RRGetProviderProperty
+R042 RANDR:GetMonitors
+R043 RANDR:SetMonitor
+R044 RANDR:DeleteMonitor
 V000 RANDR:ScreenChangeNotify
 V001 RANDR:Notify
 E000 RANDR:BadRROutput

@@ -614,7 +614,7 @@ xf86CreateI2CDevRec(void)
 void
 xf86DestroyI2CDevRec(I2CDevPtr d, Bool unalloc)
 {
-    if (d) {
+    if (d && d->pI2CBus) {
         I2CDevPtr *p;
 
         /* Remove this from the list of active I2C devices. */
@@ -628,10 +628,10 @@ xf86DestroyI2CDevRec(I2CDevPtr d, Bool unalloc)
         xf86DrvMsg(d->pI2CBus->scrnIndex, X_INFO,
                    "I2C device \"%s:%s\" removed.\n",
                    d->pI2CBus->BusName, d->DevName);
-
-        if (unalloc)
-            free(d);
     }
+
+    if (unalloc)
+        free(d);
 }
 
 /* I2C transmissions are related to an I2CDevRec you must link to a
@@ -872,7 +872,7 @@ xf86I2CGetScreenBuses(int scrnIndex, I2CBusPtr ** pppI2CBus)
         if (!pppI2CBus)
             continue;
 
-        *pppI2CBus = xnfrealloc(*pppI2CBus, n * sizeof(I2CBusPtr));
+        *pppI2CBus = xnfreallocarray(*pppI2CBus, n, sizeof(I2CBusPtr));
         (*pppI2CBus)[n - 1] = pI2CBus;
     }
 

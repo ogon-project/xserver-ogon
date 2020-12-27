@@ -46,12 +46,14 @@
 #define WM_WM_REINIT                           (WM_USER + 1)
 #define WM_WM_QUIT                             (WM_USER + 2)
 
+#define ARRAY_SIZE(a)  (sizeof((a)) / sizeof((a)[0]))
+
 /*
  * References to external symbols
  */
 
-extern void winDebug(const char *format, ...);
-extern void ErrorF(const char *format, ...);
+extern void winDebug(const char *format, ...) _X_ATTRIBUTE_PRINTF(1, 2);
+extern void ErrorF(const char *format, ...) _X_ATTRIBUTE_PRINTF(1, 2);
 
 /*
  * winclipboardtextconv.c
@@ -76,6 +78,14 @@ typedef struct
     Atom atomCompoundText;
     Atom atomTargets;
 } ClipboardAtoms;
+
+/* Modern clipboard API functions */
+typedef wBOOL WINAPI (*ADDCLIPBOARDFORMATLISTENERPROC)(HWND hwnd);
+typedef wBOOL WINAPI (*REMOVECLIPBOARDFORMATLISTENERPROC)(HWND hwnd);
+
+extern Bool g_fHasModernClipboardApi;
+extern ADDCLIPBOARDFORMATLISTENERPROC g_fpAddClipboardFormatListener;
+extern REMOVECLIPBOARDFORMATLISTENERPROC g_fpRemoveClipboardFormatListener;
 
 /*
  * winclipboardwndproc.c

@@ -127,7 +127,7 @@ XISendDeviceHierarchyEvent(int flags[MAXDEVICES])
  *
  */
 
-int
+int _X_COLD
 SProcXIChangeHierarchy(ClientPtr client)
 {
     REQUEST(xXIChangeHierarchyReq);
@@ -194,7 +194,8 @@ add_master(ClientPtr client, xXIAddMasterInfo * c, int flags[MAXDEVICES])
     flags[XTestptr->id] |= XISlaveAttached;
     flags[XTestkeybd->id] |= XISlaveAttached;
 
-    XIBarrierNewMasterDevice(client, ptr->id);
+    for (int i = 0; i < currentMaxClients; i++)
+        XIBarrierNewMasterDevice(clients[i], ptr->id);
 
  unwind:
     free(name);
@@ -300,7 +301,8 @@ remove_master(ClientPtr client, xXIRemoveMasterInfo * r, int flags[MAXDEVICES])
         }
     }
 
-    XIBarrierRemoveMasterDevice(client, ptr->id);
+    for (int i = 0; i < currentMaxClients; i++)
+        XIBarrierRemoveMasterDevice(clients[i], ptr->id);
 
     /* disable the remove the devices, XTest devices must be done first
        else the sprites they rely on will be destroyed  */
@@ -421,9 +423,7 @@ ProcXIChangeHierarchy(ClientPtr client)
     if (!stuff->num_changes)
         return rc;
 
-    if (stuff->length > (INT_MAX >> 2))
-        return BadAlloc;
-    len = (stuff->length << 2) - sizeof(xXIAnyHierarchyChangeInfo);
+    len = ((size_t)client->req_len << 2) - sizeof(xXIChangeHierarchyReq);
 
     any = (xXIAnyHierarchyChangeInfo *) &stuff[1];
     while (stuff->num_changes--) {
@@ -435,7 +435,7 @@ ProcXIChangeHierarchy(ClientPtr client)
         SWAPIF(swaps(&any->type));
         SWAPIF(swaps(&any->length));
 
-        if ((any->length > (INT_MAX >> 2)) || (len < (any->length << 2)))
+        if (len < ((size_t)any->length << 2))
             return BadLength;
 
 #define CHANGE_SIZE_MATCH(type) \

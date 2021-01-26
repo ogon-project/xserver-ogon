@@ -143,11 +143,11 @@ static void system_background(char *cmd)
 			int retCode = system(cmd);
 			if (retCode != 0)
 				fprintf(stderr, "x11rdp: error executing \"%s\"\n", cmd);
-			exit(0);
+			_exit(0);
 		}
 		else
 		{
-			exit(0);
+			_exit(0);
 		}
 	}
 	else
@@ -727,11 +727,11 @@ static BOOL rds_client_message(ogon_backend_service* backend, ogon_msg_message* 
 			write_pipe_rds_client_message(fd[1], (BYTE *)&msg->message_id, sizeof(msg->message_id));
 
 			close(fd[1]);
-			exit(0);
+			_exit(0);
 		}
 		else
 		{
-			exit(0);
+			_exit(0);
 		}
 	}
 	else

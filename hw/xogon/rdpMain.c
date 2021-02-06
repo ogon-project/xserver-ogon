@@ -167,20 +167,20 @@ static int set_bpp(int bpp)
 	return rv;
 }
 
-static void rdpWakeupHandler(void *blockData, int result, void *pReadmask)
+static void rdpWakeupHandler(void *blockData, int result)
 {
 	/*
 	 * If select returns -1 the sets are undefined.
 	 * don't process the sets in that case.
 	 */
-	if (result < 0)
-	{
-		return;
-	}
-	rdp_check(blockData, result, pReadmask);
+	// if (result < 0)
+	// {
+	// 	return;
+	// }
+	// rdp_check(blockData, result, pReadmask);
 }
 
-static void rdpBlockHandler(void *blockData, OSTimePtr pTimeout, void *pReadmask)
+static void rdpBlockHandler(void *blockData, void *pTimeout)
 {
 	rdp_handle_damage_region(0);
 }
@@ -477,6 +477,15 @@ int ddxProcessArgument(int argc, char** argv, int i)
 	return 0;
 }
 
+#if INPUTTHREAD
+/** This function is called in Xserver/os/inputthread.c when starting
+    the input thread. */
+void
+ddxInputThreadInit(void)
+{
+}
+#endif
+
 void OsVendorInit(void)
 {
 
@@ -501,14 +510,6 @@ int XkbDDXTerminateServer(DeviceIntPtr dev, KeyCode key, XkbAction *act)
 	return 0;
 }
 
-static ExtensionModule rdpExtensions[] =
-{
-#ifdef GLXEXT
-	{ GlxExtensionInit, "GLX", &noGlxExtension },
-#endif
-};
-
-
 /* InitOutput is called every time the server resets.  It should call
    AddScreen for each screen (but we only ever have one), and in turn this
    will call rdpScreenInit. */
@@ -518,8 +519,6 @@ void InitOutput(ScreenInfo* pScreenInfo, int argc, char** argv)
 
 	DEBUG_OUT("InitOutput:\n");
 	g_initOutputCalled = 1;
-
-	LoadExtensionList(rdpExtensions, ARRAY_SIZE(rdpExtensions), TRUE);
 
 	/* initialize pixmap formats */
 	pScreenInfo->imageByteOrder = IMAGE_BYTE_ORDER;
@@ -544,6 +543,8 @@ void InitOutput(ScreenInfo* pScreenInfo, int argc, char** argv)
 	{
 		FatalError("Couldn't add screen\n");
 	}
+
+	xorgGlxCreateVendor();
 
 	DEBUG_OUT("InitOutput: out\n");
 }
@@ -581,19 +582,9 @@ void ddxGiveUp(enum ExitCode error)
 	}
 }
 
-Bool LegalModifier(unsigned int key, DeviceIntPtr pDev)
-{
-	return 1; /* true */
-}
-
 void ProcessInputEvents(void)
 {
 	mieqProcessInputEvents();
-}
-
-void AbortDDX(enum ExitCode error)
-{
-	ddxGiveUp(error);
 }
 
 void OsVendorFatalError(const char *f, va_list args)

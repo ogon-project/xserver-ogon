@@ -51,6 +51,8 @@ SOFTWARE.
 #include "regionstr.h"
 #include "privates.h"
 #include "damage.h"
+#include <X11/extensions/randr.h>
+#include "picturestr.h"
 
 typedef struct _Drawable {
     unsigned char type;         /* DRAWABLE_<type> */
@@ -86,11 +88,15 @@ typedef struct _Pixmap {
 } PixmapRec;
 
 typedef struct _PixmapDirtyUpdate {
-    PixmapPtr src, slave_dst;
+    DrawablePtr src;            /* Root window / shared pixmap */
+    PixmapPtr slave_dst;        /* Shared / scanout pixmap */
     int x, y;
     DamagePtr damage;
     struct xorg_list ent;
     int dst_x, dst_y;
+    Rotation rotation;
+    PictTransform transform;
+    struct pixman_f_transform f_transform, f_inverse;
 } PixmapDirtyUpdateRec;
 
 static inline void

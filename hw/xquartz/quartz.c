@@ -43,6 +43,7 @@
 #include "darwinEvents.h"
 #include "pseudoramiX.h"
 #include "extension.h"
+#include "nonsdk_extinit.h"
 #include "glx_extinit.h"
 #define _APPLEWM_SERVER_
 #include "applewmExt.h"
@@ -148,25 +149,6 @@ QuartzSetupScreen(int index,
     return TRUE;
 }
 
-static const ExtensionModule quartzExtensions[] = {
-    /* PseudoramiX needs to be done before RandR, so
-     * it is in miinitext.c until it can be reordered.
-     * { PseudoramiXExtensionInit, "PseudoramiX", &noPseudoramiXExtension },
-     */
-#ifdef GLXEXT
-    {GlxExtensionInit, "GLX", &noGlxExtension},
-#endif
-};
-
-/*
- * QuartzExtensionInit
- * Initialises XQuartz-specific extensions.
- */
-static void QuartzExtensionInit(void)
-{
-    LoadExtensionList(quartzExtensions, ARRAY_SIZE(quartzExtensions), TRUE);
-}
-
 /*
  * QuartzInitOutput
  *  Quartz display initialization.
@@ -177,6 +159,7 @@ QuartzInitOutput(int argc,
 {
     /* For XQuartz, we want to just use the default signal handler to work better with CrashTracer */
     signal(SIGSEGV, SIG_DFL);
+    signal(SIGABRT, SIG_DFL);
     signal(SIGILL, SIG_DFL);
 #ifdef SIGEMT
     signal(SIGEMT, SIG_DFL);
@@ -206,8 +189,6 @@ QuartzInitOutput(int argc,
 
     // Do display mode specific initialization
     quartzProcs->DisplayInit();
-
-    QuartzExtensionInit();
 }
 
 /*
@@ -299,8 +280,8 @@ QuartzUpdateScreens(void)
 
     quartzProcs->UpdateScreen(pScreen);
 
-    /* miPaintWindow needs to be called after RootlessUpdateScreenPixmap (from xprUpdateScreen) */
-    miPaintWindow(pRoot, &pRoot->borderClip, PW_BACKGROUND);
+    /* PaintWindow needs to be called after RootlessUpdateScreenPixmap (from xprUpdateScreen) */
+    pScreen->PaintWindow(pRoot, &pRoot->borderClip, PW_BACKGROUND);
 
     /* Tell RandR about the new size, so new connections get the correct info */
     RRScreenSizeNotify(pScreen);
@@ -484,7 +465,7 @@ QuartzHide(void)
  *  Enable or disable rendering to the X screen.
  */
 void
-QuartzSetRootClip(BOOL enable)
+QuartzSetRootClip(int mode)
 {
     int i;
 
@@ -493,7 +474,7 @@ QuartzSetRootClip(BOOL enable)
 
     for (i = 0; i < screenInfo.numScreens; i++) {
         if (screenInfo.screens[i]) {
-            SetRootClip(screenInfo.screens[i], enable);
+            SetRootClip(screenInfo.screens[i], mode);
         }
     }
 }

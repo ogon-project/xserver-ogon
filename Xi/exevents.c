@@ -471,9 +471,9 @@ DeepCopyKeyboardClasses(DeviceIntPtr from, DeviceIntPtr to)
 
             oldTrace = to->focus->trace;
             memcpy(to->focus, from->focus, sizeof(FocusClassRec));
-            to->focus->trace = realloc(oldTrace,
-                                       to->focus->traceSize *
-                                       sizeof(WindowPtr));
+            to->focus->trace = reallocarray(oldTrace,
+                                            to->focus->traceSize,
+                                            sizeof(WindowPtr));
             if (!to->focus->trace && to->focus->traceSize)
                 FatalError("[Xi] no memory for trace.\n");
             memcpy(to->focus->trace, from->focus->trace,
@@ -661,7 +661,7 @@ void
 DeepCopyDeviceClasses(DeviceIntPtr from, DeviceIntPtr to,
                       DeviceChangedEvent *dce)
 {
-    OsBlockSIGIO();
+    input_lock();
 
     /* generic feedback classes, not tied to pointer and/or keyboard */
     DeepCopyFeedbackClasses(from, to);
@@ -671,7 +671,7 @@ DeepCopyDeviceClasses(DeviceIntPtr from, DeviceIntPtr to,
     if ((dce->flags & DEVCHANGE_POINTER_EVENT))
         DeepCopyPointerClasses(from, to);
 
-    OsReleaseSIGIO();
+    input_unlock();
 }
 
 /**
@@ -1293,14 +1293,21 @@ RetrieveTouchDeliveryData(DeviceIntPtr dev, TouchPointInfoPtr ti,
     int rc;
     InputClients *iclients = NULL;
     *mask = NULL;
+    *grab = NULL;
 
     if (listener->type == LISTENER_GRAB ||
         listener->type == LISTENER_POINTER_GRAB) {
-
         *grab = listener->grab;
 
         BUG_RETURN_VAL(!*grab, FALSE);
+    }
+    else if (ti->emulate_pointer && dev->deviceGrab.grab &&
+             !dev->deviceGrab.fromPassiveGrab) {
+        /* There may be an active pointer grab on the device */
+        *grab = dev->deviceGrab.grab;
+    }
 
+    if (*grab) {
         *client = rClient(*grab);
         *win = (*grab)->window;
         *mask = (*grab)->xi2mask;
@@ -1357,8 +1364,6 @@ RetrieveTouchDeliveryData(DeviceIntPtr dev, TouchPointInfoPtr ti,
             /* if owner selected, oclients is NULL */
             *client = oclients ? rClient(oclients) : wClient(*win);
         }
-
-        *grab = NULL;
     }
 
     return TRUE;
@@ -1377,6 +1382,9 @@ DeliverTouchEmulatedEvent(DeviceIntPtr dev, TouchPointInfoPtr ti,
 
     /* We don't deliver pointer events to non-owners */
     if (!TouchResourceIsOwner(ti, listener->listener))
+        return !Success;
+
+    if (!ti->emulate_pointer)
         return !Success;
 
     nevents = TouchConvertToPointerEvent(ev, &motion, &button);
@@ -1495,16 +1503,6 @@ DeliverEmulatedMotionEvent(DeviceIntPtr dev, TouchPointInfoPtr ti,
                                        &mask))
             return;
 
-        /* There may be a pointer grab on the device */
-        if (!grab) {
-            grab = dev->deviceGrab.grab;
-            if (grab) {
-                win = grab->window;
-                mask = grab->xi2mask;
-                client = rClient(grab);
-            }
-        }
-
         DeliverTouchEmulatedEvent(dev, ti, (InternalEvent*)&motion, &ti->listeners[0], client,
                                   win, grab, mask);
     }
@@ -1590,7 +1588,7 @@ ProcessTouchEvent(InternalEvent *ev, DeviceIntPtr dev)
     if (!ti) {
         DebugF("[Xi] %s: Failed to get event %d for touchpoint %d\n",
                dev->name, type, touchid);
-        return;
+        goto out;
     }
 
     /* if emulate_pointer is set, emulate the motion event right
@@ -1624,6 +1622,7 @@ ProcessTouchEvent(InternalEvent *ev, DeviceIntPtr dev)
     if (ev->any.type == ET_TouchEnd)
         TouchEndTouch(dev, ti);
 
+ out:
     if (emulate_pointer)
         UpdateDeviceState(dev, &ev->device_event);
 }
@@ -1759,6 +1758,10 @@ ProcessDeviceEvent(InternalEvent *ev, DeviceIntPtr device)
 
     switch (event->type) {
     case ET_KeyPress:
+        /* Don't deliver focus events (e.g. from KeymapNotify when running
+         * nested) to clients. */
+        if (event->source_type == EVENT_SOURCE_FOCUS)
+            return;
         if (!grab && CheckDeviceGrabs(device, event, 0))
             return;
         break;
@@ -1790,15 +1793,19 @@ ProcessDeviceEvent(InternalEvent *ev, DeviceIntPtr device)
         break;
     }
 
-    if (grab)
-        DeliverGrabbedEvent((InternalEvent *) event, device,
-                            deactivateDeviceGrab);
-    else if (device->focus && !IsPointerEvent(ev))
-        DeliverFocusedEvent(device, (InternalEvent *) event,
-                            GetSpriteWindow(device));
-    else
-        DeliverDeviceEvents(GetSpriteWindow(device), (InternalEvent *) event,
-                            NullGrab, NullWindow, device);
+    /* Don't deliver focus events (e.g. from KeymapNotify when running
+     * nested) to clients. */
+    if (event->source_type != EVENT_SOURCE_FOCUS) {
+        if (grab)
+            DeliverGrabbedEvent((InternalEvent *) event, device,
+                                deactivateDeviceGrab);
+        else if (device->focus && !IsPointerEvent(ev))
+            DeliverFocusedEvent(device, (InternalEvent *) event,
+                                GetSpriteWindow(device));
+        else
+            DeliverDeviceEvents(GetSpriteWindow(device), (InternalEvent *) event,
+                                NullGrab, NullWindow, device);
+    }
 
     if (deactivateDeviceGrab == TRUE) {
         (*device->deviceGrab.DeactivateGrab) (device);

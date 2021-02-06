@@ -50,7 +50,7 @@ SOFTWARE.
 #include "misc.h"
 #include "screenint.h"
 #include "regionstr.h"
-
+#include <X11/extensions/randr.h>
 /* types for Drawable */
 #define DRAWABLE_WINDOW 0
 #define DRAWABLE_PIXMAP 1
@@ -115,23 +115,23 @@ extern _X_EXPORT void FreePixmap(PixmapPtr /*pPixmap */ );
 extern _X_EXPORT PixmapPtr
 PixmapShareToSlave(PixmapPtr pixmap, ScreenPtr slave);
 
+extern _X_EXPORT void
+PixmapUnshareSlavePixmap(PixmapPtr slave_pixmap);
+
+#define HAS_DIRTYTRACKING_ROTATION 1
+#define HAS_DIRTYTRACKING_DRAWABLE_SRC 1
 extern _X_EXPORT Bool
-PixmapStartDirtyTracking(PixmapPtr src,
+PixmapStartDirtyTracking(DrawablePtr src,
                          PixmapPtr slave_dst,
-                         int x, int y);
-
-#define HAS_DIRTYTRACKING2 1
-extern _X_EXPORT Bool
-PixmapStartDirtyTracking2(PixmapPtr src,
-			  PixmapPtr slave_dst,
-			  int x, int y, int dst_x, int dst_y);
+                         int x, int y, int dst_x, int dst_y,
+                         Rotation rotation);
 
 extern _X_EXPORT Bool
-PixmapStopDirtyTracking(PixmapPtr src, PixmapPtr slave_dst);
+PixmapStopDirtyTracking(DrawablePtr src, PixmapPtr slave_dst);
 
 /* helper function, drivers can do this themselves if they can do it more
    efficently */
 extern _X_EXPORT Bool
-PixmapSyncDirtyHelper(PixmapDirtyUpdatePtr dirty, RegionPtr dirty_region);
+PixmapSyncDirtyHelper(PixmapDirtyUpdatePtr dirty);
 
 #endif                          /* PIXMAP_H */

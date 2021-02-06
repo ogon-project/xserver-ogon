@@ -102,6 +102,20 @@ static unsigned char g_reverse_byte[0x100] =
 	0x1f, 0x9f, 0x5f, 0xdf, 0x3f, 0xbf, 0x7f, 0xff
 };
 
+/* Copied from hw/vfb/InitInput.c */
+Bool
+LegalModifier(unsigned int key, DeviceIntPtr pDev)
+{
+    return TRUE;
+}
+
+/* Copied from hw/vfb/InitOutput.c */
+void
+AbortDDX(enum ExitCode error)
+{
+    ddxGiveUp(error);
+}
+
 static void KbdDeviceOn(void)
 {
 
@@ -754,7 +768,7 @@ static void rdpEnqueueKey(int type, int scancode)
 	}
 #endif
 
-	nevents = GetKeyboardEvents(rdp_events, g_keyboard, type, scancode, NULL);
+	nevents = GetKeyboardEvents(rdp_events, g_keyboard, type, scancode);
 
 	for (i = 0; i < nevents; i++) {
 #if (XOGON_ENABLE_CUSTOM_AUTOREPEAT == 1)

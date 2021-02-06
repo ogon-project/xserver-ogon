@@ -3,7 +3,7 @@ noinst_LIBRARIES = libfbcmap.a
 
 AM_CFLAGS = -DHAVE_DIX_CONFIG_H \
 	$(XOGONMODULES_CFLAGS) \
-	$(DIX_CFLAGS)
+	$(DIX_CFLAGS) @XORG_CFLAGS@
 
 SRCS=	 \
 	$(top_srcdir)/mi/miinitext.c \

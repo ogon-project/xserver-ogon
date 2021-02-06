@@ -61,12 +61,28 @@
 #include "Configint.h"
 
 
-static xf86ConfigSymTabRec VendorSubTab[] = {
+static const xf86ConfigSymTabRec VendorSubTab[] = {
     {ENDSUBSECTION, "endsubsection"},
     {IDENTIFIER, "identifier"},
     {OPTION, "option"},
     {-1, ""},
 };
+
+static void
+xf86freeVendorSubList(XF86ConfVendSubPtr ptr)
+{
+    XF86ConfVendSubPtr prev;
+
+    while (ptr) {
+        TestFree(ptr->vs_identifier);
+        TestFree(ptr->vs_name);
+        TestFree(ptr->vs_comment);
+        xf86optionListFree(ptr->vs_option_lst);
+        prev = ptr;
+        ptr = ptr->list.next;
+        free(prev);
+    }
+}
 
 #define CLEANUP xf86freeVendorSubList
 
@@ -113,7 +129,7 @@ xf86parseVendorSubSection(void)
 
 #undef CLEANUP
 
-static xf86ConfigSymTabRec VendorTab[] = {
+static const xf86ConfigSymTabRec VendorTab[] = {
     {ENDSECTION, "endsection"},
     {IDENTIFIER, "identifier"},
     {OPTION, "option"},
@@ -214,20 +230,4 @@ xf86freeVendorList(XF86ConfVendorPtr p)
     TestFree(p->vnd_comment);
     xf86optionListFree(p->vnd_option_lst);
     free(p);
-}
-
-void
-xf86freeVendorSubList(XF86ConfVendSubPtr ptr)
-{
-    XF86ConfVendSubPtr prev;
-
-    while (ptr) {
-        TestFree(ptr->vs_identifier);
-        TestFree(ptr->vs_name);
-        TestFree(ptr->vs_comment);
-        xf86optionListFree(ptr->vs_option_lst);
-        prev = ptr;
-        ptr = ptr->list.next;
-        free(prev);
-    }
 }

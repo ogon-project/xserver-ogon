@@ -24,6 +24,8 @@
 # _ladir passes a dummy rpath to libtool so the thing will actually link
 # TODO: -nostdlib/-Bstatic/-lgcc platform magic, not installing the .a, etc.
 
+include $(top_srcdir)/manpages.am
+
 AM_CFLAGS = $(DIX_CFLAGS) $(XORG_CFLAGS) $(LIBDRM_CFLAGS) $(UDEV_CFLAGS) $(CWARNFLAGS)
 
 AM_CPPFLAGS = \
@@ -52,6 +54,7 @@ modesetting_drv_la_SOURCES = \
 	 dumb_bo.h \
 	 present.c \
 	 vblank.c \
+	 pageflip.c \
 	 $(NULL)
 
 drivermandir = $(DRIVER_MAN_DIR)
@@ -61,9 +64,3 @@ driverman_DATA = $(driverman_PRE:man=@DRIVER_MAN_SUFFIX@)
 EXTRA_DIST = modesetting.man
 
 CLEANFILES = $(driverman_DATA)
-
-# String replacements in MAN_SUBSTS now come from xorg-macros.m4 via configure
-SUFFIXES = .$(DRIVER_MAN_SUFFIX) .man
-
-.man.$(DRIVER_MAN_SUFFIX):
-	$(AM_V_GEN)$(SED) $(MAN_SUBSTS) < $< > $@

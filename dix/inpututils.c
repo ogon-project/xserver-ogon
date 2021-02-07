@@ -124,10 +124,10 @@ ApplyPointerMapping(DeviceIntPtr dev, CARD8 *map, int len, ClientPtr client)
     return Success;
 }
 
-/* Check if a modifier map change is okay with the device.
- * Returns -1 for BadValue, as it collides with MappingBusy; this particular
- * caveat can be removed with LegalModifier, as we have no other reason to
- * set MappingFailed.  Sigh. */
+/* Check if a modifier map change is okay with the device. Negative return
+ * values mean BadValue, positive values mean Mapping{Busy,Failed}, 0 is
+ * Success / MappingSuccess.
+ */
 static int
 check_modmap_change(ClientPtr client, DeviceIntPtr dev, KeyCode *modmap)
 {
@@ -151,12 +151,6 @@ check_modmap_change(ClientPtr client, DeviceIntPtr dev, KeyCode *modmap)
         if (i < xkb->min_key_code || i > xkb->max_key_code) {
             client->errorValue = i;
             return -1;
-        }
-
-        /* Make sure the mapping is okay with the DDX. */
-        if (!LegalModifier(i, dev)) {
-            client->errorValue = i;
-            return MappingFailed;
         }
 
         /* None of the new modifiers may be down while we change the
@@ -282,7 +276,7 @@ change_modmap(ClientPtr client, DeviceIntPtr dev, KeyCode *modkeymap,
     else if (!IsFloating(dev) &&
              GetMaster(dev, MASTER_KEYBOARD)->lastSlave == dev) {
         /* If this fails, expect the results to be weird. */
-        if (check_modmap_change(client, dev->master, modmap))
+        if (check_modmap_change(client, dev->master, modmap) == Success)
             do_modmap_change(client, dev->master, modmap);
     }
 
@@ -505,15 +499,23 @@ valuator_mask_isset(const ValuatorMask *mask, int valuator)
     return mask->last_bit >= valuator && BitIsOn(mask->mask, valuator);
 }
 
+static inline void
+_valuator_mask_set_double(ValuatorMask *mask, int valuator, double data)
+{
+    mask->last_bit = max(valuator, mask->last_bit);
+    SetBit(mask->mask, valuator);
+    mask->valuators[valuator] = data;
+}
+
 /**
  * Set the valuator to the given floating-point data.
  */
 void
 valuator_mask_set_double(ValuatorMask *mask, int valuator, double data)
 {
-    mask->last_bit = max(valuator, mask->last_bit);
-    SetBit(mask->mask, valuator);
-    mask->valuators[valuator] = data;
+    BUG_WARN_MSG(mask->has_unaccelerated,
+                 "Do not mix valuator types, zero mask first\n");
+    _valuator_mask_set_double(mask, valuator, data);
 }
 
 /**
@@ -594,11 +596,15 @@ valuator_mask_unset(ValuatorMask *mask, int valuator)
 
         ClearBit(mask->mask, valuator);
         mask->valuators[valuator] = 0.0;
+        mask->unaccelerated[valuator] = 0.0;
 
         for (i = 0; i <= mask->last_bit; i++)
             if (valuator_mask_isset(mask, i))
                 lastbit = max(lastbit, i);
         mask->last_bit = lastbit;
+
+        if (mask->last_bit == -1)
+            mask->has_unaccelerated = FALSE;
     }
 }
 
@@ -609,6 +615,79 @@ valuator_mask_copy(ValuatorMask *dest, const ValuatorMask *src)
         memcpy(dest, src, sizeof(*dest));
     else
         valuator_mask_zero(dest);
+}
+
+Bool
+valuator_mask_has_unaccelerated(const ValuatorMask *mask)
+{
+    return mask->has_unaccelerated;
+}
+
+void
+valuator_mask_drop_unaccelerated(ValuatorMask *mask)
+{
+    memset(mask->unaccelerated, 0, sizeof(mask->unaccelerated));
+    mask->has_unaccelerated = FALSE;
+}
+
+void
+valuator_mask_set_absolute_unaccelerated(ValuatorMask *mask,
+                                         int valuator,
+                                         int absolute,
+                                         double unaccel)
+{
+    BUG_WARN_MSG(mask->last_bit != -1 && !mask->has_unaccelerated,
+                 "Do not mix valuator types, zero mask first\n");
+    _valuator_mask_set_double(mask, valuator, absolute);
+    mask->has_unaccelerated = TRUE;
+    mask->unaccelerated[valuator] = unaccel;
+}
+
+/**
+ * Set both accelerated and unaccelerated value for this mask.
+ */
+void
+valuator_mask_set_unaccelerated(ValuatorMask *mask,
+                                int valuator,
+                                double accel,
+                                double unaccel)
+{
+    BUG_WARN_MSG(mask->last_bit != -1 && !mask->has_unaccelerated,
+                 "Do not mix valuator types, zero mask first\n");
+    _valuator_mask_set_double(mask, valuator, accel);
+    mask->has_unaccelerated = TRUE;
+    mask->unaccelerated[valuator] = unaccel;
+}
+
+double
+valuator_mask_get_accelerated(const ValuatorMask *mask,
+                              int valuator)
+{
+    return valuator_mask_get_double(mask, valuator);
+}
+
+double
+valuator_mask_get_unaccelerated(const ValuatorMask *mask,
+                                int valuator)
+{
+    return mask->unaccelerated[valuator];
+}
+
+Bool
+valuator_mask_fetch_unaccelerated(const ValuatorMask *mask,
+                                  int valuator,
+                                  double *accel,
+                                  double *unaccel)
+{
+    if (valuator_mask_isset(mask, valuator)) {
+        if (accel)
+            *accel = valuator_mask_get_accelerated(mask, valuator);
+        if (unaccel)
+            *unaccel = valuator_mask_get_unaccelerated(mask, valuator);
+        return TRUE;
+    }
+    else
+        return FALSE;
 }
 
 int
@@ -655,7 +734,8 @@ verify_internal_event(const InternalEvent *ev)
  * device.
  */
 void
-init_device_event(DeviceEvent *event, DeviceIntPtr dev, Time ms)
+init_device_event(DeviceEvent *event, DeviceIntPtr dev, Time ms,
+                  enum DeviceEventSource source_type)
 {
     memset(event, 0, sizeof(DeviceEvent));
     event->header = ET_Internal;
@@ -663,6 +743,7 @@ init_device_event(DeviceEvent *event, DeviceIntPtr dev, Time ms)
     event->time = ms;
     event->deviceid = dev->id;
     event->sourceid = dev->id;
+    event->source_type = source_type;
 }
 
 int
@@ -1138,4 +1219,29 @@ xi2mask_get_one_mask(const XI2Mask *mask, int deviceid)
     BUG_WARN(deviceid >= mask->nmasks);
 
     return mask->masks[deviceid];
+}
+
+/**
+ * Copies a sprite data from src to dst sprites.
+ *
+ * Returns FALSE on error.
+ */
+Bool
+CopySprite(SpritePtr src, SpritePtr dst)
+{
+    WindowPtr *trace;
+    if (src->spriteTraceGood > dst->spriteTraceSize) {
+        trace = reallocarray(dst->spriteTrace,
+                             src->spriteTraceSize, sizeof(*trace));
+        if (!trace) {
+            dst->spriteTraceGood = 0;
+            return FALSE;
+        }
+        dst->spriteTrace = trace;
+        dst->spriteTraceSize = src->spriteTraceGood;
+    }
+    memcpy(dst->spriteTrace, src->spriteTrace,
+           src->spriteTraceGood * sizeof(*trace));
+    dst->spriteTraceGood = src->spriteTraceGood;
+    return TRUE;
 }

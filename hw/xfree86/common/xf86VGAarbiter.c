@@ -105,7 +105,7 @@ Bool
 xf86VGAarbiterAllowDRI(ScreenPtr pScreen)
 {
     int vga_count;
-    int rsrc_decodes;
+    int rsrc_decodes = 0;
     ScrnInfoPtr pScrn = xf86ScreenToScrn(pScreen);
 
     if (vga_no_arb)
@@ -265,23 +265,21 @@ VGAarbiterCloseScreen(ScreenPtr pScreen)
 }
 
 static void
-VGAarbiterBlockHandler(ScreenPtr pScreen,
-                       void *pTimeout, void *pReadmask)
+VGAarbiterBlockHandler(ScreenPtr pScreen, void *pTimeout)
 {
     SCREEN_PROLOG(BlockHandler);
     VGAGet(pScreen);
-    pScreen->BlockHandler(pScreen, pTimeout, pReadmask);
+    pScreen->BlockHandler(pScreen, pTimeout);
     VGAPut();
     SCREEN_EPILOG(BlockHandler, VGAarbiterBlockHandler);
 }
 
 static void
-VGAarbiterWakeupHandler(ScreenPtr pScreen, unsigned long result,
-                        void *pReadmask)
+VGAarbiterWakeupHandler(ScreenPtr pScreen, int result)
 {
     SCREEN_PROLOG(WakeupHandler);
     VGAGet(pScreen);
-    pScreen->WakeupHandler(pScreen, result, pReadmask);
+    pScreen->WakeupHandler(pScreen, result);
     VGAPut();
     SCREEN_EPILOG(WakeupHandler, VGAarbiterWakeupHandler);
 }
@@ -323,9 +321,8 @@ VGAarbiterSourceValidate(DrawablePtr pDrawable,
 
     SCREEN_PROLOG(SourceValidate);
     VGAGet(pScreen);
-    if (pScreen->SourceValidate)
-        (*pScreen->SourceValidate) (pDrawable, x, y, width, height,
-                                    subWindowMode);
+    (*pScreen->SourceValidate) (pDrawable, x, y, width, height,
+                                subWindowMode);
     VGAPut();
     SCREEN_EPILOG(SourceValidate, VGAarbiterSourceValidate);
 }

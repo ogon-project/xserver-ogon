@@ -21,7 +21,6 @@ libdix_la_SOURCES = 	\
 	events.c	\
 	eventconvert.c  \
 	extension.c	\
-	ffs.c		\
 	gc.c		\
 	getevents.c	\
 	globals.c	\
@@ -43,32 +42,20 @@ libdix_la_SOURCES = 	\
 	touch.c		\
 	window.c
 
-EXTRA_DIST = buildatoms BuiltInAtoms Xserver.d Xserver-dtrace.h.in
+EXTRA_DIST = buildatoms BuiltInAtoms
 
 # Install list of protocol names
 miscconfigdir = $(SERVER_MISC_CONFIG_PATH)
 dist_miscconfig_DATA = protocol.txt
 
-if XSERVER_DTRACE
-# Generate dtrace header file for C sources to include
-BUILT_SOURCES = Xserver-dtrace.h
-
-Xserver-dtrace.h: $(srcdir)/Xserver.d
-	$(AM_V_GEN)$(DTRACE) -C -h -o $@ -s $(srcdir)/Xserver.d \
-		|| cp Xserver-dtrace.h.in $@
-
-endif
-
 if SPECIAL_DTRACE_OBJECTS
 # Generate dtrace object code for probes in libdix
-dtrace-dix.o: $(top_srcdir)/dix/Xserver.d $(am_libdix_la_OBJECTS)
-	$(AM_V_GEN)$(DTRACE) -G -C -o $@ -s $(top_srcdir)/dix/Xserver.d $(am_libdix_la_OBJECTS:%.lo=.libs/%.o)
+dtrace-dix.o: $(top_srcdir)/include/Xserver.d libdix.la
+	$(AM_V_GEN)$(DTRACE) -G -C -o $@ -s $(top_srcdir)/include/Xserver.d $(am_libdix_la_OBJECTS:%.lo=.libs/%.o)
 
 noinst_PROGRAMS = dix.O
 
 dix_O_SOURCES =
-dix.O: dtrace-dix.o $(am_libdix_la_OBJECTS)
+dix.O: dtrace-dix.o libdix.la
 	$(AM_V_GEN)ld -r -o $@ $(am_libdix_la_OBJECTS:%.lo=.libs/%.o)
 endif
-
-CLEANFILES = Xserver-dtrace.h

@@ -72,10 +72,17 @@ compCheckWindow(WindowPtr pWin, void *data)
     else {
         assert(pWinPixmap == pParentPixmap);
     }
-    assert(0 < pWinPixmap->refcnt && pWinPixmap->refcnt < 3);
-    assert(0 < pScreenPixmap->refcnt && pScreenPixmap->refcnt < 3);
-    if (pParentPixmap)
-        assert(0 <= pParentPixmap->refcnt && pParentPixmap->refcnt < 3);
+
+    assert(0 < pWinPixmap->refcnt)
+    assert(pWinPixmap->refcnt < 3);
+
+    assert(0 < pScreenPixmap->refcnt);
+    assert(pScreenPixmap->refcnt < 3);
+
+    if (pParentPixmap) {
+        assert(0 <= pParentPixmap->refcnt);
+        assert(pParentPixmap->refcnt < 3);
+    }
     return WT_WALKCHILDREN;
 }
 
@@ -89,6 +96,7 @@ compCheckTree(ScreenPtr pScreen)
 typedef struct _compPixmapVisit {
     WindowPtr pWindow;
     PixmapPtr pPixmap;
+    int bw;
 } CompPixmapVisitRec, *CompPixmapVisitPtr;
 
 static Bool
@@ -104,7 +112,7 @@ compRepaintBorder(ClientPtr pClient, void *closure)
 
         RegionNull(&exposed);
         RegionSubtract(&exposed, &pWindow->borderClip, &pWindow->winSize);
-        miPaintWindow(pWindow, &exposed, PW_BORDER);
+        pWindow->drawable.pScreen->PaintWindow(pWindow, &exposed, PW_BORDER);
         RegionUninit(&exposed);
     }
     return TRUE;
@@ -126,19 +134,20 @@ compSetPixmapVisitWindow(WindowPtr pWindow, void *data)
      */
     SetWinSize(pWindow);
     SetBorderSize(pWindow);
-    if (HasBorder(pWindow))
+    if (pVisit->bw)
         QueueWorkProc(compRepaintBorder, serverClient,
                       (void *) (intptr_t) pWindow->drawable.id);
     return WT_WALKCHILDREN;
 }
 
 void
-compSetPixmap(WindowPtr pWindow, PixmapPtr pPixmap)
+compSetPixmap(WindowPtr pWindow, PixmapPtr pPixmap, int bw)
 {
     CompPixmapVisitRec visitRec;
 
     visitRec.pWindow = pWindow;
     visitRec.pPixmap = pPixmap;
+    visitRec.bw = bw;
     TraverseTree(pWindow, compSetPixmapVisitWindow, (void *) &visitRec);
     compCheckTree(pWindow->drawable.pScreen);
 }
@@ -318,18 +327,13 @@ compClipNotify(WindowPtr pWin, int dx, int dy)
     }
 }
 
-/*
- * Returns TRUE if the window needs server-provided automatic redirect,
- * which is true if the child and parent aren't both regular or ARGB visuals
- */
-
-static Bool
+Bool
 compIsAlternateVisual(ScreenPtr pScreen, XID visual)
 {
     CompScreenPtr cs = GetCompScreen(pScreen);
     int i;
 
-    for (i = 0; i < cs->numAlternateVisuals; i++)
+    for (i = 0; cs && i < cs->numAlternateVisuals; i++)
         if (cs->alternateVisuals[i] == visual)
             return TRUE;
     return FALSE;
@@ -435,6 +439,7 @@ compReparentWindow(WindowPtr pWin, WindowPtr pPriorParent)
 {
     ScreenPtr pScreen = pWin->drawable.pScreen;
     CompScreenPtr cs = GetCompScreen(pScreen);
+    CompWindowPtr cw;
 
     pScreen->ReparentWindow = cs->ReparentWindow;
     /*
@@ -448,7 +453,7 @@ compReparentWindow(WindowPtr pWin, WindowPtr pPriorParent)
     compUnredirectOneSubwindow(pPriorParent, pWin);
     compRedirectOneSubwindow(pWin->parent, pWin);
     /*
-     * Add any implict redirect due to synthesized visual
+     * Add any implicit redirect due to synthesized visual
      */
     if (compImplicitRedirect(pWin, pWin->parent))
         compRedirectWindow(serverClient, pWin, CompositeRedirectAutomatic);
@@ -463,7 +468,8 @@ compReparentWindow(WindowPtr pWin, WindowPtr pPriorParent)
      * Reset pixmap pointers as appropriate
      */
     if (pWin->parent && pWin->redirectDraw == RedirectDrawNone)
-        compSetPixmap(pWin, (*pScreen->GetWindowPixmap) (pWin->parent));
+        compSetPixmap(pWin, (*pScreen->GetWindowPixmap) (pWin->parent),
+                      pWin->borderWidth);
     /*
      * Call down to next function
      */
@@ -471,6 +477,11 @@ compReparentWindow(WindowPtr pWin, WindowPtr pPriorParent)
         (*pScreen->ReparentWindow) (pWin, pPriorParent);
     cs->ReparentWindow = pScreen->ReparentWindow;
     pScreen->ReparentWindow = compReparentWindow;
+
+    cw = GetCompWindow(pWin);
+    if (pWin->damagedDescendants || (cw && cw->damaged))
+        compMarkAncestors(pWin);
+
     compCheckTree(pWin->drawable.pScreen);
 }
 

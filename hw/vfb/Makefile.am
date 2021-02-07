@@ -8,7 +8,8 @@ AM_CFLAGS = -DHAVE_DIX_CONFIG_H \
 
 SRCS =	InitInput.c \
 	InitOutput.c \
-	$(top_srcdir)/mi/miinitext.c
+	$(top_srcdir)/mi/miinitext.c \
+	$(top_srcdir)/mi/miinitext.h
 
 Xvfb_SOURCES = $(SRCS)
 
@@ -16,7 +17,6 @@ XVFB_LIBS = \
         @XVFB_LIBS@ \
 	$(MAIN_LIB) \
 	$(XSERVER_LIBS) \
-	$(top_builddir)/Xext/libXextdpmsstubs.la \
 	$(top_builddir)/Xi/libXistubs.la
 
 Xvfb_LDADD = $(XVFB_LIBS) $(XVFB_SYS_LIBS) $(XSERVER_SYS_LIBS)

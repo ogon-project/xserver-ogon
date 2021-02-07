@@ -124,10 +124,10 @@ else\
 
 /*
  * These are defines for error messages to promote consistency.
- * error messages are preceded by the line number, section and file name,
+ * Error messages are preceded by the line number, section and file name,
  * so these messages should be about the specific keyword and syntax in error.
- * To help limit namespace polution, end each with _MSG.
- * limit messages to 70 characters if possible.
+ * To help limit namespace pollution, end each with _MSG.
+ * Limit messages to 70 characters if possible.
  */
 
 #define BAD_OPTION_MSG \
@@ -204,6 +204,8 @@ else\
 "Multiple \"%s\" lines."
 #define MUST_BE_OCTAL_MSG \
 "The number \"%d\" given in this section must be in octal (0xxx) format."
+#define GPU_DEVICE_TOO_MANY \
+"More than %d GPU devices defined."
 
 /* Warning messages */
 #define OBSOLETE_MSG \

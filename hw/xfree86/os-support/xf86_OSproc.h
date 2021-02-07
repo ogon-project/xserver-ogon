@@ -68,9 +68,9 @@
 #define _XF86_OSPROC_H
 
 /*
- * The actual prototypes have been pulled into this seperate file so
+ * The actual prototypes have been pulled into this separate file so
  * that they can can be used without pulling in all of the OS specific
- * stuff like sys/stat.h, etc. This casues problem for loadable modules.
+ * stuff like sys/stat.h, etc. that causes problems for loadable modules.
  */
 
 /*
@@ -90,7 +90,7 @@
 #ifndef NO_OSLIB_PROTOTYPES
 /*
  * This is to prevent re-entrancy to FatalError() when aborting.
- * Anything that can be called as a result of AbortDDX() should use this
+ * Anything that can be called as a result of ddxGiveUp() should use this
  * instead of FatalError().
  */
 
@@ -136,6 +136,7 @@ extern _X_EXPORT int xf86GetSerialModemState(int fd);
 extern _X_EXPORT int xf86SerialModemSetBits(int fd, int bits);
 extern _X_EXPORT int xf86SerialModemClearBits(int fd, int bits);
 extern _X_EXPORT int xf86LoadKernelModule(const char *pathname);
+extern _X_EXPORT void xf86OSInputThreadInit(void);
 
 /* AGP GART interface */
 
@@ -169,10 +170,6 @@ extern _X_EXPORT Bool xf86GARTCloseScreen(int screenNum);
 extern _X_EXPORT int xf86InstallSIGIOHandler(int fd, void (*f) (int, void *),
                                              void *);
 extern _X_EXPORT int xf86RemoveSIGIOHandler(int fd);
-extern _X_EXPORT int xf86BlockSIGIO(void);
-extern _X_EXPORT void xf86UnblockSIGIO(int);
-extern _X_EXPORT void xf86AssertBlockedSIGIO(char *);
-extern _X_EXPORT Bool xf86SIGIOSupported(void);
 
 #ifdef XF86_OS_PRIVS
 typedef void (*PMClose) (void);

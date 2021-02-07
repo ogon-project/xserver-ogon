@@ -44,6 +44,7 @@
 #include "xf86Xinput.h"
 #include "xf86Optrec.h"
 #include "xf86Parser.h"
+#include "xf86platformBus.h" /* For OutputClass functions */
 #include "optionstr.h"
 
 static Bool ParseOptionValue(int scrnIndex, XF86OptionPtr options,
@@ -64,7 +65,7 @@ static Bool ParseOptionValue(int scrnIndex, XF86OptionPtr options,
  *
  * The order of precedence for options is:
  *
- *   extraOpts, display, confScreen, monitor, device
+ *   extraOpts, display, confScreen, monitor, device, outputClassOptions
  */
 
 void
@@ -79,12 +80,14 @@ xf86CollectOptions(ScrnInfoPtr pScrn, XF86OptionPtr extraOpts)
     pScrn->options = NULL;
 
     for (i = pScrn->numEntities - 1; i >= 0; i--) {
+        xf86MergeOutputClassOptions(pScrn->entityList[i], &pScrn->options);
+
         device = xf86GetDevFromEntity(pScrn->entityList[i],
                                       pScrn->entityInstanceList[i]);
         if (device && device->options) {
             tmp = xf86optionListDup(device->options);
             if (pScrn->options)
-                xf86optionListMerge(pScrn->options, tmp);
+                pScrn->options = xf86optionListMerge(pScrn->options, tmp);
             else
                 pScrn->options = tmp;
         }
@@ -210,7 +213,7 @@ LookupBoolOption(XF86OptionPtr optlist, const char *name, int deflt,
     o.name = name;
     o.type = OPTV_BOOLEAN;
     if (ParseOptionValue(-1, optlist, &o, markUsed))
-        deflt = o.value.bool;
+        deflt = o.value.boolean;
     return deflt;
 }
 
@@ -471,7 +474,7 @@ xf86ShowUnusedOptions(int scrnIndex, XF86OptionPtr opt)
 static Bool
 GetBoolValue(OptionInfoPtr p, const char *s)
 {
-    return xf86getBoolValue(&p->value.bool, s);
+    return xf86getBoolValue(&p->value.boolean, s);
 }
 
 static Bool
@@ -675,7 +678,7 @@ ParseOptionValue(int scrnIndex, XF86OptionPtr options, OptionInfoPtr p,
             if (markUsed)
                 xf86MarkOptionUsedByName(options, newn);
             if (GetBoolValue(&opt, s)) {
-                p->value.bool = !opt.value.bool;
+                p->value.boolean = !opt.value.boolean;
                 p->found = TRUE;
             }
             else {
@@ -866,7 +869,7 @@ xf86GetOptValBool(const OptionInfoRec * table, int token, Bool *value)
 
     p = xf86TokenToOptinfo(table, token);
     if (p && p->found) {
-        *value = p->value.bool;
+        *value = p->value.boolean;
         return TRUE;
     }
     else
@@ -880,7 +883,7 @@ xf86ReturnOptValBool(const OptionInfoRec * table, int token, Bool def)
 
     p = xf86TokenToOptinfo(table, token);
     if (p && p->found) {
-        return p->value.bool;
+        return p->value.boolean;
     }
     else
         return def;

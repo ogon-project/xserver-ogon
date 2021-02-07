@@ -401,8 +401,8 @@ xf86I2CProbeAddress(I2CBusPtr b, I2CSlaveAddr addr)
  * 3rd, if a Start condition has been successfully sent,
  *   Send a Stop condition.
  *
- * The functions exits immediately when an error occures,
- * not proceeding any data left. However, step 3 will
+ * The function exits immediately when an error occurs,
+ * not processing any data left. However, step 3 will
  * be executed anyway to leave the bus in clean idle state.
  */
 
@@ -440,7 +440,7 @@ I2CWriteRead(I2CDevPtr d,
     return r;
 }
 
-/* wrapper - for compatibility and convinience */
+/* wrapper - for compatibility and convenience */
 
 Bool
 xf86I2CWriteRead(I2CDevPtr d,
@@ -592,7 +592,7 @@ xf86I2CWriteVec(I2CDevPtr d, I2CByte * vec, int nValues)
  * =========================
  */
 
-/* Allocates an I2CDevRec for you and initializes with propper defaults
+/* Allocates an I2CDevRec for you and initializes with proper defaults
  * you may modify before calling xf86I2CDevInit. Your I2CDevRec must
  * contain at least a SlaveAddr, and a pI2CBus pointer to the bus this
  * device shall be linked to.
@@ -614,7 +614,7 @@ xf86CreateI2CDevRec(void)
 void
 xf86DestroyI2CDevRec(I2CDevPtr d, Bool unalloc)
 {
-    if (d) {
+    if (d && d->pI2CBus) {
         I2CDevPtr *p;
 
         /* Remove this from the list of active I2C devices. */
@@ -628,10 +628,10 @@ xf86DestroyI2CDevRec(I2CDevPtr d, Bool unalloc)
         xf86DrvMsg(d->pI2CBus->scrnIndex, X_INFO,
                    "I2C device \"%s:%s\" removed.\n",
                    d->pI2CBus->BusName, d->DevName);
-
-        if (unalloc)
-            free(d);
     }
+
+    if (unalloc)
+        free(d);
 }
 
 /* I2C transmissions are related to an I2CDevRec you must link to a
@@ -692,7 +692,7 @@ xf86I2CFindDev(I2CBusPtr b, I2CSlaveAddr addr)
 
 static I2CBusPtr I2CBusList;
 
-/* Allocates an I2CBusRec for you and initializes with propper defaults
+/* Allocates an I2CBusRec for you and initializes with proper defaults
  * you may modify before calling xf86I2CBusInit. Your I2CBusRec must
  * contain at least a BusName, a scrnIndex (or -1), and a complete set
  * of either high or low level I2C function pointers. You may pass
@@ -872,7 +872,7 @@ xf86I2CGetScreenBuses(int scrnIndex, I2CBusPtr ** pppI2CBus)
         if (!pppI2CBus)
             continue;
 
-        *pppI2CBus = xnfrealloc(*pppI2CBus, n * sizeof(I2CBusPtr));
+        *pppI2CBus = xnfreallocarray(*pppI2CBus, n, sizeof(I2CBusPtr));
         (*pppI2CBus)[n - 1] = pI2CBus;
     }
 

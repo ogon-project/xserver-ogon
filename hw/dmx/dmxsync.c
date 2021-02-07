@@ -99,13 +99,13 @@ dmxSyncCallback(OsTimerPtr timer, CARD32 time, void *arg)
 }
 
 static void
-dmxSyncBlockHandler(void *blockData, OSTimePtr pTimeout, void *pReadMask)
+dmxSyncBlockHandler(void *blockData, void *timeout)
 {
     TimerForce(dmxSyncTimer);
 }
 
 static void
-dmxSyncWakeupHandler(void *blockData, int result, void *pReadMask)
+dmxSyncWakeupHandler(void *blockData, int result)
 {
 }
 
@@ -146,7 +146,7 @@ dmxSyncInit(void)
  * is TRUE, call XSync() immediately instead of waiting for the next
  * XSync() batching point.  Note that if XSync() batching was deselected
  * with #dmxSyncActivate() before #dmxSyncInit() was called, then no
- * XSync() batching is performed and this function always calles XSync()
+ * XSync() batching is performed and this function always calls XSync()
  * immediately.
  *
  * (Note that this function uses TimerSet but works correctly in the
@@ -182,7 +182,7 @@ dmxSync(DMXScreenInfo * dmxScreen, Bool now)
 
         /* Do sync or set time for later */
         if (now || !dmxScreen) {
-            if (!TimerForce(dmxSyncTimer))
+            if (dmxSyncTimer == NULL || !TimerForce(dmxSyncTimer))
                 dmxSyncCallback(NULL, 0, NULL);
             /* At this point, dmxSyncPending == 0 because
              * dmxSyncCallback must have been called. */

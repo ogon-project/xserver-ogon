@@ -344,7 +344,7 @@ ProcDRI2CopyRegion(ClientPtr client)
     /* CopyRegion needs to be a round trip to make sure the X server
      * queues the swap buffer rendering commands before the DRI client
      * continues rendering.  The reply has a bitmask to signal the
-     * presense of optional return values as well, but we're not using
+     * presence of optional return values as well, but we're not using
      * that yet.
      */
 
@@ -634,7 +634,7 @@ ProcDRI2Dispatch(ClientPtr client)
     }
 }
 
-static int
+static int _X_COLD
 SProcDRI2Connect(ClientPtr client)
 {
     REQUEST(xDRI2ConnectReq);
@@ -659,7 +659,7 @@ SProcDRI2Connect(ClientPtr client)
     return Success;
 }
 
-static int
+static int _X_COLD
 SProcDRI2Dispatch(ClientPtr client)
 {
     REQUEST(xReq);

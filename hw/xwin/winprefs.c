@@ -37,6 +37,7 @@
 #include <stdlib.h>
 #ifdef __CYGWIN__
 #include <sys/resource.h>
+#include <sys/cygwin.h>
 #endif
 #include "win.h"
 
@@ -46,6 +47,7 @@
 #include "winprefs.h"
 #include "windisplay.h"
 #include "winmultiwindowclass.h"
+#include "winmultiwindowicons.h"
 
 /* Where will the custom menu commands start counting from? */
 #define STARTMENUID WM_USER
@@ -57,9 +59,6 @@ extern int parse_file(FILE * fp);
 
 /* Currently in use command ID, incremented each new menu item created */
 static int g_cmdid = STARTMENUID;
-
-/* Local function to handle comma-ified icon names */
-static HICON LoadImageComma(char *fname, int sx, int sy, int flags);
 
 /*
  * Creates or appends a menu from a MENUPARSED structure
@@ -137,7 +136,6 @@ MakeMenu(char *name, HMENU editMenu, int editItem)
     return hmenu;
 }
 
-#ifdef XWIN_MULTIWINDOW
 /*
  * Callback routine that is executed once per window class.
  * Removes or creates custom window settings depending on LPARAM
@@ -196,7 +194,6 @@ ReloadEnumWindowsProc(HWND hwnd, LPARAM lParam)
 
     return TRUE;
 }
-#endif
 
 /*
  * Removes any custom icons in classes, custom menus, etc.
@@ -205,19 +202,20 @@ ReloadEnumWindowsProc(HWND hwnd, LPARAM lParam)
  * Set custom icons and menus again.
  */
 static void
-ReloadPrefs(void)
+ReloadPrefs(winPrivScreenPtr pScreenPriv)
 {
     int i;
 
-#ifdef XWIN_MULTIWINDOW
+    winScreenInfo *pScreenInfo = pScreenPriv->pScreenInfo;
+
     /* First, iterate over all windows, deleting their icons and custom menus.
      * This is really only needed because winDestroyIcon() will try to
      * destroy the old global icons, which will have changed.
      * It is probably better to set a windows USER_DATA to flag locally defined
      * icons, and use that to accurately know when to destroy old icons.
      */
-    EnumThreadWindows(g_dwCurrentThreadID, ReloadEnumWindowsProc, FALSE);
-#endif
+    if (pScreenInfo->fMultiWindow)
+        EnumThreadWindows(g_dwCurrentThreadID, ReloadEnumWindowsProc, FALSE);
 
     /* Now, free/clear all info from our prefs structure */
     for (i = 0; i < pref.menuItems; i++)
@@ -260,14 +258,12 @@ ReloadPrefs(void)
     g_hIconX = NULL;
     g_hSmallIconX = NULL;
 
-#ifdef XWIN_MULTIWINDOW
-    winInitGlobalIcons();
-#endif
+    if (pScreenInfo->fMultiWindow) {
+        winInitGlobalIcons();
 
-#ifdef XWIN_MULTIWINDOW
-    /* Rebuild the icons and menus */
-    EnumThreadWindows(g_dwCurrentThreadID, ReloadEnumWindowsProc, TRUE);
-#endif
+        /* Rebuild the icons and menus */
+        EnumThreadWindows(g_dwCurrentThreadID, ReloadEnumWindowsProc, TRUE);
+    }
 
     /* Whew, done */
 }
@@ -299,10 +295,10 @@ HandleCustomWM_INITMENU(HWND hwnd, HMENU hmenu)
 
 /*
  * Searches for the custom WM_COMMAND command ID and performs action.
- * Return TRUE if command is proccessed, FALSE otherwise.
+ * Return TRUE if command is processed, FALSE otherwise.
  */
 Bool
-HandleCustomWM_COMMAND(HWND hwnd, int command)
+HandleCustomWM_COMMAND(HWND hwnd, WORD command, winPrivScreenPtr pScreenPriv)
 {
     int i, j;
     MENUPARSED *m;
@@ -381,14 +377,16 @@ HandleCustomWM_COMMAND(HWND hwnd, int command)
                         SetWindowPos(hwnd,
                                      HWND_TOPMOST,
                                      0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
-#if XWIN_MULTIWINDOW
-                    /* Reflect the changed Z order */
-                    winReorderWindowsMultiWindow();
-#endif
+                    {
+                        winScreenInfo *pScreenInfo = pScreenPriv->pScreenInfo;
+                        if (pScreenInfo->fMultiWindow)
+                            /* Reflect the changed Z order */
+                            winReorderWindowsMultiWindow();
+                    }
                     return TRUE;
 
                 case CMD_RELOAD:
-                    ReloadPrefs();
+                    ReloadPrefs(pScreenPriv);
                     return TRUE;
 
                 default:
@@ -401,7 +399,6 @@ HandleCustomWM_COMMAND(HWND hwnd, int command)
     return FALSE;
 }
 
-#ifdef XWIN_MULTIWINDOW
 /*
  * Add the default or a custom menu depending on the class match
  */
@@ -451,7 +448,6 @@ SetupSysMenu(HWND hwnd)
             MakeMenu(pref.defaultSysMenuName, sys, -1);
     }
 }
-#endif
 
 /*
  * Possibly add a menu to the toolbar icon
@@ -476,7 +472,7 @@ winOverrideDefaultIcon(int size)
     HICON hicon;
 
     if (pref.defaultIconName[0]) {
-        hicon = LoadImageComma(pref.defaultIconName, size, size, 0);
+        hicon = LoadImageComma(pref.defaultIconName, pref.iconDirectory, size, size, 0);
         if (hicon == NULL)
             ErrorF("winOverrideDefaultIcon: LoadImageComma(%s) failed\n",
                    pref.defaultIconName);
@@ -498,9 +494,12 @@ winTaskbarIcon(void)
     hicon = 0;
     /* First try and load an overridden, if success then return it */
     if (pref.trayIconName[0]) {
-        hicon = LoadImageComma(pref.trayIconName,
+        hicon = LoadImageComma(pref.trayIconName, pref.iconDirectory,
                                GetSystemMetrics(SM_CXSMICON),
                                GetSystemMetrics(SM_CYSMICON), 0);
+        if (hicon == NULL)
+            ErrorF("winTaskbarIcon: LoadImageComma(%s) failed\n",
+                   pref.trayIconName);
     }
 
     /* Otherwise return the default */
@@ -515,17 +514,18 @@ winTaskbarIcon(void)
 }
 
 /*
+ * Handle comma-ified icon names
+ *
  * Parse a filename to extract an icon:
  *  If fname is exactly ",nnn" then extract icon from our resource
  *  else if it is "file,nnn" then extract icon nnn from that file
  *  else try to load it as an .ico file and if that fails return NULL
  */
-static HICON
-LoadImageComma(char *fname, int sx, int sy, int flags)
+HICON
+LoadImageComma(char *fname, char *iconDirectory, int sx, int sy, int flags)
 {
     HICON hicon;
     int i;
-    char file[PATH_MAX + NAME_MAX + 2];
 
     /* Some input error checking */
     if (!fname || !fname[0])
@@ -541,31 +541,67 @@ LoadImageComma(char *fname, int sx, int sy, int flags)
                           MAKEINTRESOURCE(i), IMAGE_ICON, sx, sy, flags);
     }
     else {
+        char *file = malloc(PATH_MAX + NAME_MAX + 2);
+        Bool convert = FALSE;
+
+        if (!file)
+            return NULL;
+
         file[0] = 0;
-        /* Prepend path if not given a "X:\" filename */
+
+        /* If fname starts 'X:\', it's an absolute Windows path, do nothing */
         if (!(fname[0] && fname[1] == ':' && fname[2] == '\\')) {
-            strcpy(file, pref.iconDirectory);
-            if (pref.iconDirectory[0])
-                if (fname[strlen(fname) - 1] != '\\')
-                    strcat(file, "\\");
+#ifdef  __CYGWIN__
+            /* If fname starts with '/', it's an absolute cygwin path, we'll
+               need to convert it */
+            if (fname[0] == '/') {
+                convert = TRUE;
+            }
+            else
+#endif
+            if (iconDirectory) {
+                /* Otherwise, prepend the default icon directory, which
+                   currently must be in absolute Windows path form */
+                strcpy(file, iconDirectory);
+                if (iconDirectory[0])
+                    if (iconDirectory[strlen(iconDirectory) - 1] != '\\')
+                        strcat(file, "\\");
+            }
         }
         strcat(file, fname);
 
+        /* Trim off any ',index' */
         if (strrchr(file, ',')) {
-            /* Specified as <fname>,<index> */
-
             *(strrchr(file, ',')) = 0;  /* End string at comma */
             i = atoi(strrchr(fname, ',') + 1);
+        }
+        else {
+            i = -1;
+        }
+
+#ifdef  __CYGWIN__
+        /* Convert from Cygwin path to Windows path */
+        if (convert) {
+            char *converted_file = cygwin_create_path(CCP_POSIX_TO_WIN_A | CCP_ABSOLUTE, file);
+            if (converted_file) {
+                free(file);
+                file = converted_file;
+            }
+        }
+#endif
+
+        if (i >= 0) {
+            /* Specified as <fname>,<index> */
             hicon = ExtractIcon(g_hInstance, file, i);
         }
         else {
-            /* Just an .ico file... */
-
+            /* Specified as just an .ico file */
             hicon = (HICON) LoadImage(NULL,
                                       file,
                                       IMAGE_ICON,
                                       sx, sy, LR_LOADFROMFILE | flags);
         }
+        free(file);
     }
     return hicon;
 }
@@ -587,7 +623,7 @@ winOverrideIcon(char *res_name, char *res_class, char *wmName)
             if (pref.icon[i].hicon)
                 return pref.icon[i].hicon;
 
-            hicon = LoadImageComma(pref.icon[i].iconFile, 0, 0, LR_DEFAULTSIZE);
+            hicon = LoadImageComma(pref.icon[i].iconFile, pref.iconDirectory, 0, 0, LR_DEFAULTSIZE);
             if (hicon == NULL)
                 ErrorF("winOverrideIcon: LoadImageComma(%s) failed\n",
                        pref.icon[i].iconFile);

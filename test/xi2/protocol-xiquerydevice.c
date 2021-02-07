@@ -54,6 +54,8 @@ struct test_data {
     int num_devices_in_reply;
 };
 
+extern ClientRec client_window;
+
 static void reply_XIQueryDevice_data(ClientPtr client, int len, char *data,
                                      void *closure);
 static void reply_XIQueryDevice(ClientPtr client, int len, char *data,
@@ -249,7 +251,8 @@ reply_XIQueryDevice_data(ClientPtr client, int len, char *data, void *closure)
                     }
 
                     assert(vi->length == 11);
-                    assert(vi->number >= 0 && vi->number < 4);
+                    assert(vi->number >= 0);
+                    assert(vi->number < 4);
                     if (info->deviceid == 2)    /* VCP */
                         assert(vi->number < 2);
 
@@ -333,7 +336,7 @@ test_XIQueryDevice(void)
 }
 
 int
-main(int argc, char **argv)
+protocol_xiquerydevice_test(void)
 {
     init_simple();
 

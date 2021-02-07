@@ -35,9 +35,11 @@
 #ifdef HAVE_XWIN_CONFIG_H
 #include <xwin-config.h>
 #endif
+
 #include "win.h"
 #include "dixevents.h"
 #include "winmultiwindowclass.h"
+#include "winmultiwindowicons.h"
 
 /*
  * Prototypes for local functions
@@ -219,8 +221,8 @@ winPositionWindowMultiWindow(WindowPtr pWin, int x, int y)
 
 #if CYGMULTIWINDOW_DEBUG
     lpRc = &rcNew;
-    ErrorF("winPositionWindowMultiWindow - (%d ms)drawable (%d, %d)-(%d, %d)\n",
-           GetTickCount(), lpRc->left, lpRc->top, lpRc->right, lpRc->bottom);
+    ErrorF("winPositionWindowMultiWindow - drawable (%d, %d)-(%d, %d)\n",
+           (int)lpRc->left, (int)lpRc->top, (int)lpRc->right, (int)lpRc->bottom);
 #endif
 
     /*
@@ -237,16 +239,16 @@ winPositionWindowMultiWindow(WindowPtr pWin, int x, int y)
     GetClientRect(hWnd, &rcClient);
 
     lpRc = &rcNew;
-    ErrorF("winPositionWindowMultiWindow - (%d ms)rcNew (%d, %d)-(%d, %d)\n",
-           GetTickCount(), lpRc->left, lpRc->top, lpRc->right, lpRc->bottom);
+    ErrorF("winPositionWindowMultiWindow - rcNew (%d, %d)-(%d, %d)\n",
+           (int)lpRc->left, (int)lpRc->top, (int)lpRc->right, (int)lpRc->bottom);
 
     lpRc = &rcOld;
-    ErrorF("winPositionWindowMultiWindow - (%d ms)rcOld (%d, %d)-(%d, %d)\n",
-           GetTickCount(), lpRc->left, lpRc->top, lpRc->right, lpRc->bottom);
+    ErrorF("winPositionWindowMultiWindow - rcOld (%d, %d)-(%d, %d)\n",
+           (int)lpRc->left, (int)lpRc->top, (int)lpRc->right, (int)lpRc->bottom);
 
     lpRc = &rcClient;
-    ErrorF("(%d ms)rcClient (%d, %d)-(%d, %d)\n",
-           GetTickCount(), lpRc->left, lpRc->top, lpRc->right, lpRc->bottom);
+    ErrorF("rcClient (%d, %d)-(%d, %d)\n",
+           (int)lpRc->left, (int)lpRc->top, (int)lpRc->right, (int)lpRc->bottom);
 #endif
 
     /* Check if the old rectangle and new rectangle are the same */
@@ -256,8 +258,8 @@ winPositionWindowMultiWindow(WindowPtr pWin, int x, int y)
 #endif
 
 #if CYGWINDOWING_DEBUG
-        ErrorF("\tMoveWindow to (%ld, %ld) - %ldx%ld\n", rcNew.left, rcNew.top,
-               rcNew.right - rcNew.left, rcNew.bottom - rcNew.top);
+        ErrorF("\tMoveWindow to (%d, %d) - %dx%d\n", (int)rcNew.left, (int)rcNew.top,
+               (int)(rcNew.right - rcNew.left), (int)(rcNew.bottom - rcNew.top));
 #endif
         /* Change the position and dimensions of the Windows window */
         MoveWindow(hWnd,
@@ -379,8 +381,9 @@ winReparentWindowMultiWindow(WindowPtr pWin, WindowPtr pPriorParent)
 
     winDebug
         ("winReparentMultiWindow - pWin:%p XID:0x%x, reparent from pWin:%p XID:0x%x to pWin:%p XID:0x%x\n",
-         pWin, pWin->drawable.id, pPriorParent, pPriorParent->drawable.id,
-         pWin->parent, pWin->parent->drawable.id);
+         pWin, (unsigned int)pWin->drawable.id,
+         pPriorParent, (unsigned int)pPriorParent->drawable.id,
+         pWin->parent, (unsigned int)pWin->parent->drawable.id);
 
     WIN_UNWRAP(ReparentWindow);
     if (pScreen->ReparentWindow)
@@ -484,7 +487,6 @@ winCreateWindowsWindow(WindowPtr pWin)
     HWND hFore = NULL;
 
     winWindowPriv(pWin);
-    winPrivScreenPtr pScreenPriv = pWinPriv->pScreenPriv;
     WinXSizeHints hints;
     Window daddyId;
     DWORD dwStyle, dwExStyle;
@@ -493,7 +495,7 @@ winCreateWindowsWindow(WindowPtr pWin)
     winInitMultiWindowClass();
 
     winDebug("winCreateWindowsTopLevelWindow - pWin:%p XID:0x%x \n", pWin,
-             pWin->drawable.id);
+             (unsigned int)pWin->drawable.id);
 
     iX = pWin->drawable.x + GetSystemMetrics(SM_XVIRTUALSCREEN);
     iY = pWin->drawable.y + GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -502,15 +504,19 @@ winCreateWindowsWindow(WindowPtr pWin)
     iHeight = pWin->drawable.height;
 
     /* If it's an InputOutput window, and so is going to end up being made visible,
-       make sure the window actually ends up somewhere where it will be visible */
-    if (pWin->drawable.class != InputOnly) {
-        if ((iX < GetSystemMetrics(SM_XVIRTUALSCREEN)) ||
-            (iX > GetSystemMetrics(SM_CXVIRTUALSCREEN)))
-            iX = CW_USEDEFAULT;
+       make sure the window actually ends up somewhere where it will be visible
 
-        if ((iY < GetSystemMetrics(SM_YVIRTUALSCREEN)) ||
-            (iY > GetSystemMetrics(SM_CYVIRTUALSCREEN)))
-            iY = CW_USEDEFAULT;
+       To handle arrangements of monitors which form a non-rectangular virtual
+       desktop, check if the window will end up with its top-left corner on any
+       monitor
+    */
+    if (pWin->drawable.class != InputOnly) {
+        POINT pt = { iX, iY };
+        if (MonitorFromPoint(pt, MONITOR_DEFAULTTONULL) == NULL)
+            {
+                iX = CW_USEDEFAULT;
+                iY = CW_USEDEFAULT;
+            }
     }
 
     winDebug("winCreateWindowsWindow - %dx%d @ %dx%d\n", iWidth, iHeight, iX,
@@ -518,9 +524,13 @@ winCreateWindowsWindow(WindowPtr pWin)
 
     if (winMultiWindowGetTransientFor(pWin, &daddyId)) {
         if (daddyId) {
-            hFore = GetForegroundWindow();
-            if (hFore && (daddyId != (Window) (INT_PTR) GetProp(hFore, WIN_WID_PROP)))
-                hFore = NULL;
+            WindowPtr pParent;
+            int res = dixLookupWindow(&pParent, daddyId, serverClient, DixReadAccess);
+            if (res == Success)
+                {
+                    winPrivWinPtr pParentPriv = winGetWindowPriv(pParent);
+                    hFore = pParentPriv->hWnd;
+                }
         }
     }
     else {
@@ -541,7 +551,7 @@ winCreateWindowsWindow(WindowPtr pWin)
 
     /*
        Calculate the window coordinates containing the requested client area,
-       being careful to preseve CW_USEDEFAULT
+       being careful to preserve CW_USEDEFAULT
      */
     rc.top = (iY != CW_USEDEFAULT) ? iY : 0;
     rc.left = (iX != CW_USEDEFAULT) ? iX : 0;
@@ -597,9 +607,6 @@ winCreateWindowsWindow(WindowPtr pWin)
 
     /* Flag that this Windows window handles its own activation */
     SetProp(hWnd, WIN_NEEDMANAGE_PROP, (HANDLE) 0);
-
-    /* Call engine-specific create window procedure */
-    (*pScreenPriv->pwinFinishCreateWindowsWindow) (pWin);
 }
 
 Bool winInDestroyWindowsWindow = FALSE;
@@ -619,7 +626,7 @@ winDestroyWindowsWindow(WindowPtr pWin)
     HICON hIconSm;
 
     winDebug("winDestroyWindowsWindow - pWin:%p XID:0x%x \n", pWin,
-             pWin->drawable.id);
+             (unsigned int)pWin->drawable.id);
 
     /* Bail out if the Windows window handle is invalid */
     if (pWinPriv->hWnd == NULL)
@@ -713,7 +720,7 @@ winGetWindowID(WindowPtr pWin)
     FindClientResourcesByType(c, RT_WINDOW, winFindWindow, &wi);
 
 #if CYGMULTIWINDOW_DEBUG
-    ErrorF("winGetWindowID - Window ID: %d\n", wi.id);
+    ErrorF("winGetWindowID - Window ID: %u\n", (unsigned int)wi.id);
 #endif
 
     return wi.id;
@@ -744,7 +751,7 @@ winReorderWindowsMultiWindow(void)
     WindowPtr pWin = NULL;
     WindowPtr pWinSib = NULL;
     XID vlist[2];
-    static Bool fRestacking = FALSE;    /* Avoid recusive calls to this function */
+    static Bool fRestacking = FALSE; /* Avoid recursive calls to this function */
     DWORD dwCurrentProcessID = GetCurrentProcessId();
     DWORD dwWindowProcessID = 0;
 
@@ -753,7 +760,7 @@ winReorderWindowsMultiWindow(void)
 #endif
 
     if (fRestacking) {
-        /* It is a recusive call so immediately exit */
+        /* It is a recursive call so immediately exit */
 #if CYGWINDOWING_DEBUG
         ErrorF("winReorderWindowsMultiWindow - "
                "exit because fRestacking == TRUE\n");
@@ -790,56 +797,6 @@ winReorderWindowsMultiWindow(void)
     }
 
     fRestacking = FALSE;
-}
-
-/*
- * winMinimizeWindow - Minimize in response to WM_CHANGE_STATE
- */
-
-void
-winMinimizeWindow(Window id)
-{
-    WindowPtr pWin;
-    winPrivWinPtr pWinPriv;
-
-#ifdef XWIN_MULTIWINDOWEXTWM
-    win32RootlessWindowPtr pRLWinPriv;
-#endif
-    HWND hWnd;
-    ScreenPtr pScreen = NULL;
-    winPrivScreenPtr pScreenPriv = NULL;
-
-#if CYGWINDOWING_DEBUG
-    ErrorF("winMinimizeWindow\n");
-#endif
-
-    dixLookupResourceByType((void *) &pWin, id, RT_WINDOW, NullClient,
-                            DixUnknownAccess);
-    if (!pWin) {
-        ErrorF("%s: NULL pWin. Leaving\n", __FUNCTION__);
-        return;
-    }
-
-    pScreen = pWin->drawable.pScreen;
-    if (pScreen)
-        pScreenPriv = winGetScreenPriv(pScreen);
-
-#ifdef XWIN_MULTIWINDOWEXTWM
-    if (pScreenPriv && pScreenPriv->pScreenInfo->fInternalWM) {
-        pRLWinPriv =
-            (win32RootlessWindowPtr) RootlessFrameForWindow(pWin, FALSE);
-        hWnd = pRLWinPriv->hWnd;
-    }
-    else
-#else
-    if (pScreenPriv)
-#endif
-    {
-        pWinPriv = winGetWindowPriv(pWin);
-        hWnd = pWinPriv->hWnd;
-    }
-
-    ShowWindow(hWnd, SW_MINIMIZE);
 }
 
 /*
@@ -947,13 +904,13 @@ winAdjustXWindow(WindowPtr pWin, HWND hwnd)
     SetRect(&rcDraw, x, y, x + pDraw->width, y + pDraw->height);
 #ifdef CYGMULTIWINDOW_DEBUG
     winDebug("\tDrawable extend {%d, %d, %d, %d}, {%d, %d}\n",
-             rcDraw.left, rcDraw.top, rcDraw.right, rcDraw.bottom,
-             rcDraw.right - rcDraw.left, rcDraw.bottom - rcDraw.top);
+             (int)rcDraw.left, (int)rcDraw.top, (int)rcDraw.right, (int)rcDraw.bottom,
+             (int)(rcDraw.right - rcDraw.left), (int)(rcDraw.bottom - rcDraw.top));
 #endif
     dwExStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
     dwStyle = GetWindowLongPtr(hwnd, GWL_STYLE);
 #ifdef CYGMULTIWINDOW_DEBUG
-    winDebug("\tWindowStyle: %08x %08x\n", dwStyle, dwExStyle);
+    winDebug("\tWindowStyle: %08x %08x\n", (unsigned int)dwStyle, (unsigned int)dwExStyle);
 #endif
     AdjustWindowRectEx(&rcDraw, dwStyle, FALSE, dwExStyle);
 
@@ -961,11 +918,11 @@ winAdjustXWindow(WindowPtr pWin, HWND hwnd)
     GetWindowRect(hwnd, &rcWin);
 #ifdef CYGMULTIWINDOW_DEBUG
     winDebug("\tWindow extend {%d, %d, %d, %d}, {%d, %d}\n",
-             rcWin.left, rcWin.top, rcWin.right, rcWin.bottom,
-             rcWin.right - rcWin.left, rcWin.bottom - rcWin.top);
+             (int)rcWin.left, (int)rcWin.top, (int)rcWin.right, (int)rcWin.bottom,
+             (int)(rcWin.right - rcWin.left), (int)(rcWin.bottom - rcWin.top));
     winDebug("\tDraw extend {%d, %d, %d, %d}, {%d, %d}\n",
-             rcDraw.left, rcDraw.top, rcDraw.right, rcDraw.bottom,
-             rcDraw.right - rcDraw.left, rcDraw.bottom - rcDraw.top);
+             (int)rcDraw.left, (int)rcDraw.top, (int)rcDraw.right, (int)rcDraw.bottom,
+             (int)(rcDraw.right - rcDraw.left), (int)(rcDraw.bottom - rcDraw.top));
 #endif
 
     if (EqualRect(&rcDraw, &rcWin)) {
@@ -993,12 +950,269 @@ winAdjustXWindow(WindowPtr pWin, HWND hwnd)
     vlist[2] = pDraw->width + dW;
     vlist[3] = pDraw->height + dH;
 #if CYGWINDOWING_DEBUG
-    ErrorF("\tConfigureWindow to (%ld, %ld) - %ldx%ld\n", vlist[0], vlist[1],
-           vlist[2], vlist[3]);
+    ErrorF("\tConfigureWindow to (%u, %u) - %ux%u\n",
+           (unsigned int)vlist[0], (unsigned int)vlist[1],
+           (unsigned int)vlist[2], (unsigned int)vlist[3]);
 #endif
     return ConfigureWindow(pWin, CWX | CWY | CWWidth | CWHeight,
                            vlist, wClient(pWin));
 
 #undef WIDTH
 #undef HEIGHT
+}
+
+/*
+  Helper function for creating a DIB to back a pixmap
+ */
+static HBITMAP winCreateDIB(ScreenPtr pScreen, int width, int height, int bpp, void **ppvBits, BITMAPINFOHEADER **ppbmih)
+{
+    winScreenPriv(pScreen);
+    BITMAPV4HEADER *pbmih = NULL;
+    HBITMAP hBitmap = NULL;
+
+    /* Allocate bitmap info header */
+    pbmih = malloc(sizeof(BITMAPV4HEADER) + 256 * sizeof(RGBQUAD));
+    if (pbmih == NULL) {
+        ErrorF("winCreateDIB: malloc() failed\n");
+        return NULL;
+    }
+    memset(pbmih, 0, sizeof(BITMAPV4HEADER) + 256 * sizeof(RGBQUAD));
+
+    /* Describe bitmap to be created */
+    pbmih->bV4Size = sizeof(BITMAPV4HEADER);
+    pbmih->bV4Width = width;
+    pbmih->bV4Height = -height;  /* top-down bitmap */
+    pbmih->bV4Planes = 1;
+    pbmih->bV4BitCount = bpp;
+    if (bpp == 1) {
+        RGBQUAD *bmiColors = (RGBQUAD *)((char *)pbmih + sizeof(BITMAPV4HEADER));
+        pbmih->bV4V4Compression = BI_RGB;
+        bmiColors[1].rgbBlue = 255;
+        bmiColors[1].rgbGreen = 255;
+        bmiColors[1].rgbRed = 255;
+    }
+    else if (bpp == 8) {
+        pbmih->bV4V4Compression = BI_RGB;
+        pbmih->bV4ClrUsed = 0;
+    }
+    else if (bpp == 16) {
+        pbmih->bV4V4Compression = BI_RGB;
+        pbmih->bV4ClrUsed = 0;
+    }
+    else if (bpp == 32) {
+        pbmih->bV4V4Compression = BI_BITFIELDS;
+        pbmih->bV4RedMask = pScreenPriv->dwRedMask;
+        pbmih->bV4GreenMask = pScreenPriv->dwGreenMask;
+        pbmih->bV4BlueMask = pScreenPriv->dwBlueMask;
+        pbmih->bV4AlphaMask = 0;
+    }
+    else {
+        ErrorF("winCreateDIB: %d bpp unhandled\n", bpp);
+    }
+
+    /* Create a DIB with a bit pointer */
+    hBitmap = CreateDIBSection(NULL,
+                               (BITMAPINFO *) pbmih,
+                               DIB_RGB_COLORS, ppvBits, NULL, 0);
+    if (hBitmap == NULL) {
+        ErrorF("winCreateDIB: CreateDIBSection() failed\n");
+        return NULL;
+    }
+
+    /* Store the address of the BMIH in the ppbmih parameter */
+    *ppbmih = (BITMAPINFOHEADER *)pbmih;
+
+    winDebug("winCreateDIB: HBITMAP %p pBMIH %p pBits %p\n", hBitmap, pbmih, *ppvBits);
+
+    return hBitmap;
+}
+
+
+/*
+ * CreatePixmap - See Porting Layer Definition
+ */
+PixmapPtr
+winCreatePixmapMultiwindow(ScreenPtr pScreen, int width, int height, int depth,
+                           unsigned usage_hint)
+{
+    winPrivPixmapPtr pPixmapPriv = NULL;
+    PixmapPtr pPixmap = NULL;
+    int bpp, paddedwidth;
+
+    /* allocate Pixmap header and privates */
+    pPixmap = AllocatePixmap(pScreen, 0);
+    if (!pPixmap)
+        return NullPixmap;
+
+    bpp = BitsPerPixel(depth);
+    /*
+      DIBs have 4-byte aligned rows
+
+      paddedwidth is the width in bytes, padded to align
+
+      i.e. round up the number of bits used by a row so it is a multiple of 32,
+      then convert to bytes
+    */
+    paddedwidth = (((bpp * width) + 31) & ~31)/8;
+
+    /* setup Pixmap header */
+    pPixmap->drawable.type = DRAWABLE_PIXMAP;
+    pPixmap->drawable.class = 0;
+    pPixmap->drawable.pScreen = pScreen;
+    pPixmap->drawable.depth = depth;
+    pPixmap->drawable.bitsPerPixel = bpp;
+    pPixmap->drawable.id = 0;
+    pPixmap->drawable.serialNumber = NEXT_SERIAL_NUMBER;
+    pPixmap->drawable.x = 0;
+    pPixmap->drawable.y = 0;
+    pPixmap->drawable.width = width;
+    pPixmap->drawable.height = height;
+    pPixmap->devKind = paddedwidth;
+    pPixmap->refcnt = 1;
+    pPixmap->devPrivate.ptr = NULL; // later set to pbBits
+    pPixmap->primary_pixmap = NULL;
+#ifdef COMPOSITE
+    pPixmap->screen_x = 0;
+    pPixmap->screen_y = 0;
+#endif
+    pPixmap->usage_hint = usage_hint;
+
+    /* Check for zero width or height pixmaps */
+    if (width == 0 || height == 0) {
+        /* DIBs with a dimension of 0 aren't permitted, so don't try to allocate
+           a DIB, just set fields and return */
+        return pPixmap;
+    }
+
+    /* Initialize pixmap privates */
+    pPixmapPriv = winGetPixmapPriv(pPixmap);
+    pPixmapPriv->hBitmap = NULL;
+    pPixmapPriv->pbBits = NULL;
+    pPixmapPriv->pbmih = NULL;
+
+    /* Create a DIB for the pixmap */
+    pPixmapPriv->hBitmap = winCreateDIB(pScreen, width, height, bpp, &pPixmapPriv->pbBits, &pPixmapPriv->pbmih);
+    pPixmapPriv->owned = TRUE;
+
+    winDebug("winCreatePixmap: pPixmap %p HBITMAP %p pBMIH %p pBits %p\n", pPixmap, pPixmapPriv->hBitmap, pPixmapPriv->pbmih, pPixmapPriv->pbBits);
+    /* XXX: so why do we need this in privates ??? */
+    pPixmap->devPrivate.ptr = pPixmapPriv->pbBits;
+
+    return pPixmap;
+}
+
+/*
+ * DestroyPixmap - See Porting Layer Definition
+ */
+Bool
+winDestroyPixmapMultiwindow(PixmapPtr pPixmap)
+{
+    winPrivPixmapPtr pPixmapPriv = NULL;
+
+    /* Bail early if there is not a pixmap to destroy */
+    if (pPixmap == NULL) {
+        return TRUE;
+    }
+
+    /* Decrement reference count, return if nonzero */
+    --pPixmap->refcnt;
+    if (pPixmap->refcnt != 0)
+        return TRUE;
+
+    winDebug("winDestroyPixmap: pPixmap %p\n", pPixmap);
+
+    /* Get a handle to the pixmap privates */
+    pPixmapPriv = winGetPixmapPriv(pPixmap);
+
+    /* Nothing to do if we don't own the DIB */
+    if (!pPixmapPriv->owned)
+        return TRUE;
+
+    /* Free GDI bitmap */
+    if (pPixmapPriv->hBitmap)
+        DeleteObject(pPixmapPriv->hBitmap);
+
+    /* Free the bitmap info header memory */
+    free(pPixmapPriv->pbmih);
+    pPixmapPriv->pbmih = NULL;
+
+    /* Free the pixmap memory */
+    free(pPixmap);
+    pPixmap = NULL;
+
+    return TRUE;
+}
+
+/*
+ * ModifyPixmapHeader - See Porting Layer Definition
+ */
+Bool
+winModifyPixmapHeaderMultiwindow(PixmapPtr pPixmap,
+                                 int width,
+                                 int height,
+                                 int depth,
+                                 int bitsPerPixel, int devKind, void *pPixData)
+{
+    int i;
+    winPrivPixmapPtr pPixmapPriv = winGetPixmapPriv(pPixmap);
+    Bool fResult;
+
+    /* reinitialize everything */
+    pPixmap->drawable.depth = depth;
+    pPixmap->drawable.bitsPerPixel = bitsPerPixel;
+    pPixmap->drawable.id = 0;
+    pPixmap->drawable.x = 0;
+    pPixmap->drawable.y = 0;
+    pPixmap->drawable.width = width;
+    pPixmap->drawable.height = height;
+    pPixmap->devKind = devKind;
+    pPixmap->refcnt = 1;
+    pPixmap->devPrivate.ptr = pPixData;
+    pPixmap->drawable.serialNumber = NEXT_SERIAL_NUMBER;
+
+    /*
+      This can be used for some out-of-order initialization on the screen
+      pixmap, which is the only case we can properly support.
+    */
+
+    /* Look for which screen this pixmap corresponds to */
+    for (i = 0; i < screenInfo.numScreens; i++) {
+        ScreenPtr pScreen = screenInfo.screens[i];
+        winScreenPriv(pScreen);
+        winScreenInfo *pScreenInfo = pScreenPriv->pScreenInfo;
+
+        if (pScreenInfo->pfb == pPixData)
+            {
+                /* and initialize pixmap privates from screen privates */
+                pPixmapPriv->hBitmap = pScreenPriv->hbmpShadow;
+                pPixmapPriv->pbBits = pScreenInfo->pfb;
+                pPixmapPriv->pbmih = pScreenPriv->pbmih;
+
+                /* mark these not to get released by DestroyPixmap */
+                pPixmapPriv->owned = FALSE;
+
+                return TRUE;
+            }
+    }
+
+    /* Otherwise, since creating a DIBSection from arbitrary memory is not
+     * possible, fallback to normal.  If needed, we can create a DIBSection with
+     * a copy of the bits later (see comment about a potential slow-path in
+     * winBltExposedWindowRegionShadowGDI()). */
+    pPixmapPriv->hBitmap = 0;
+    pPixmapPriv->pbBits = 0;
+    pPixmapPriv->pbmih = 0;
+    pPixmapPriv->owned = FALSE;
+
+    winDebug("winModifyPixmapHeaderMultiwindow: falling back\n");
+
+    {
+        ScreenPtr pScreen = pPixmap->drawable.pScreen;
+        winScreenPriv(pScreen);
+        WIN_UNWRAP(ModifyPixmapHeader);
+        fResult = (*pScreen->ModifyPixmapHeader) (pPixmap, width, height, depth, bitsPerPixel, devKind, pPixData);
+        WIN_WRAP(ModifyPixmapHeader, winModifyPixmapHeaderMultiwindow);
+    }
+
+    return fResult;
 }

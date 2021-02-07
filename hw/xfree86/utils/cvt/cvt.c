@@ -54,11 +54,11 @@ XNFalloc(unsigned long n)
 
 /* xnfcalloc implementation used by the server code we built in */
 void *
-XNFcalloc(unsigned long n)
+XNFcallocarray(size_t nmemb, size_t size)
 {
     void *r;
 
-    r = calloc(1, n);
+    r = calloc(nmemb, size);
     if (!r) {
         perror("calloc failed");
         exit(1);
@@ -67,7 +67,7 @@ XNFcalloc(unsigned long n)
 }
 
 /*
- * Quickly check wether this is a CVT standard mode.
+ * Quickly check whether this is a CVT standard mode.
  */
 static Bool
 CVTCheckStandard(int HDisplay, int VDisplay, float VRefresh, Bool Reduced,
@@ -108,7 +108,7 @@ PrintUsage(char *Name)
     fprintf(stderr, "usage: %s [-v|--verbose] [-r|--reduced] X Y [refresh]\n",
             Name);
     fprintf(stderr, "\n");
-    fprintf(stderr, " -v|--verbose : Warn about CVT standard adherance.\n");
+    fprintf(stderr, " -v|--verbose : Warn about CVT standard adherence.\n");
     fprintf(stderr, " -r|--reduced : Create a mode with reduced blanking "
             "(default: normal blanking).\n");
     fprintf(stderr, "            X : Desired horizontal resolution "

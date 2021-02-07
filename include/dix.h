@@ -136,12 +136,19 @@ typedef HWEventQueueType *HWEventQueuePtr;
 
 extern _X_EXPORT HWEventQueuePtr checkForInput[2];
 
+static inline _X_NOTSAN Bool
+InputCheckPending(void)
+{
+    return (*checkForInput[0] != *checkForInput[1]);
+}
+
 typedef struct _TimeStamp {
     CARD32 months;              /* really ~49.7 days */
     CARD32 milliseconds;
 } TimeStamp;
 
 /* dispatch.c */
+extern _X_EXPORT ClientPtr GetCurrentClient(void);
 
 extern _X_EXPORT void SetInputCheck(HWEventQueuePtr /*c0 */ ,
                                     HWEventQueuePtr /*c1 */ );
@@ -208,31 +215,33 @@ extern _X_EXPORT int AlterSaveSetForClient(ClientPtr /*client */ ,
 
 extern _X_EXPORT void DeleteWindowFromAnySaveSet(WindowPtr /*pWin */ );
 
-extern _X_EXPORT void BlockHandler(void *pTimeout,
-                                   void *pReadmask);
+extern _X_EXPORT void BlockHandler(void *timeout);
 
-extern _X_EXPORT void WakeupHandler(int result,
-                                    void *pReadmask);
+extern _X_EXPORT void WakeupHandler(int result);
 
 void
- EnableLimitedSchedulingLatency(void);
+EnableLimitedSchedulingLatency(void);
 
 void
- DisableLimitedSchedulingLatency(void);
+DisableLimitedSchedulingLatency(void);
 
-typedef void (*WakeupHandlerProcPtr) (void *blockData,
-                                      int result,
-                                      void *pReadmask);
+typedef void (*ServerBlockHandlerProcPtr) (void *blockData,
+                                           void *timeout);
 
-extern _X_EXPORT Bool RegisterBlockAndWakeupHandlers(BlockHandlerProcPtr blockHandler,
-                                                     WakeupHandlerProcPtr wakeupHandler,
+typedef void (*ServerWakeupHandlerProcPtr) (void *blockData,
+                                            int result);
+
+extern _X_EXPORT Bool RegisterBlockAndWakeupHandlers(ServerBlockHandlerProcPtr blockHandler,
+                                                     ServerWakeupHandlerProcPtr wakeupHandler,
                                                      void *blockData);
 
-extern _X_EXPORT void RemoveBlockAndWakeupHandlers(BlockHandlerProcPtr blockHandler,
-                                                   WakeupHandlerProcPtr wakeupHandler,
+extern _X_EXPORT void RemoveBlockAndWakeupHandlers(ServerBlockHandlerProcPtr blockHandler,
+                                                   ServerWakeupHandlerProcPtr wakeupHandler,
                                                    void *blockData);
 
 extern _X_EXPORT void InitBlockAndWakeupHandlers(void);
+
+extern _X_EXPORT void ClearWorkQueue(void);
 
 extern _X_EXPORT void ProcessWorkQueue(void);
 
@@ -254,6 +263,11 @@ extern _X_EXPORT Bool ClientSleep(ClientPtr client,
 #define ___CLIENTSIGNAL_DEFINED___
 extern _X_EXPORT Bool ClientSignal(ClientPtr /*client */ );
 #endif                          /* ___CLIENTSIGNAL_DEFINED___ */
+
+#define CLIENT_SIGNAL_ANY ((void *)-1)
+extern _X_EXPORT int ClientSignalAll(ClientPtr /*client*/,
+                                     ClientSleepProcPtr /*function*/,
+                                     void * /*closure*/);
 
 extern _X_EXPORT void ClientWakeup(ClientPtr /*client */ );
 
@@ -289,9 +303,6 @@ InitAtoms(void);
 
 extern _X_EXPORT void
 SetVendorRelease(int release);
-
-extern _X_EXPORT void
-SetVendorString(const char *string);
 
 int
 dix_main(int argc, char *argv[], char *envp[]);
@@ -439,6 +450,10 @@ DeliverGrabbedEvent(InternalEvent * /* event */ ,
                     Bool /* deactivateGrab */ );
 
 extern void
+FreezeThisEventIfNeededForSyncGrab(DeviceIntPtr thisDev,
+                                   InternalEvent *event);
+
+extern void
 FixKeyState(DeviceEvent * /* event */ ,
             DeviceIntPtr /* keybd */ );
 
@@ -543,11 +558,6 @@ extern _X_EXPORT void
 ScreenRestructured(ScreenPtr pScreen);
 #endif
 
-#ifndef HAVE_FFS
-extern _X_EXPORT int
-ffs(int i);
-#endif
-
 /*
  *  ServerGrabCallback stuff
  */
@@ -585,6 +595,8 @@ typedef struct {
     InternalEvent *event;
     DeviceIntPtr device;
 } DeviceEventInfoRec;
+
+extern _X_EXPORT CallbackListPtr RootWindowFinalizeCallback;
 
 extern int
 XItoCoreType(int xi_type);

@@ -205,6 +205,12 @@ extern _X_EXPORT void mieqProcessDeviceEvent(DeviceIntPtr /* dev */ ,
 extern _X_EXPORT void mieqProcessInputEvents(void
     );
 
+extern _X_EXPORT void mieqAddCallbackOnDrained(CallbackProcPtr callback,
+                                               void *param);
+
+extern _X_EXPORT void mieqRemoveCallbackOnDrained(CallbackProcPtr callback,
+                                                  void *param);
+
 extern DeviceIntPtr CopyGetMasterEvent(DeviceIntPtr /* sdev */ ,
                                        InternalEvent * /* original */ ,
                                        InternalEvent *  /* copy */
@@ -359,6 +365,10 @@ extern _X_EXPORT void miPushPixels(GCPtr /*pGC */ ,
     );
 
 /* miscrinit.c */
+
+extern _X_EXPORT void
+miSourceValidate(DrawablePtr pDrawable, int x, int y, int w, int h,
+                 unsigned int subWindowMode);
 
 extern _X_EXPORT Bool miModifyPixmapHeader(PixmapPtr pPixmap,
                                            int width,

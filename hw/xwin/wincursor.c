@@ -95,9 +95,7 @@ winPointerWarpCursor(DeviceIntPtr pDev, ScreenPtr pScreen, int x, int y)
      */
     if ((pScreenPriv->hwndScreen == GetForegroundWindow())
         || pScreenPriv->pScreenInfo->fRootless
-#ifdef XWIN_MULTIWINDOW
         || pScreenPriv->pScreenInfo->fMultiWindow
-#endif
         ) {
         /* Get the client area coordinates */
         GetClientRect(pScreenPriv->hwndScreen, &rcClient);
@@ -175,7 +173,7 @@ winLoadCursor(ScreenPtr pScreen, CursorPtr pCursor, int screen)
     dBackY = BRIGHTNESS(pCursor->back);
     fReverse = dForeY < dBackY;
 
-    /* Check wether the X11 cursor is bigger than the win32 cursor */
+    /* Check whether the X11 cursor is bigger than the win32 cursor */
     if (pScreenPriv->cursor.sm_cx < pCursor->bits->width ||
         pScreenPriv->cursor.sm_cy < pCursor->bits->height) {
         winErrorFVerb(3,

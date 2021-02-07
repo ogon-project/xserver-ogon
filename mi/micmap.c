@@ -278,14 +278,14 @@ miCreateDefColormap(ScreenPtr pScreen)
 
 #define _RZ(d) ((d + 2) / 3)
 #define _RS(d) 0
-#define _RM(d) ((1 << _RZ(d)) - 1)
+#define _RM(d) ((1U << _RZ(d)) - 1)
 #define _GZ(d) ((d - _RZ(d) + 1) / 2)
 #define _GS(d) _RZ(d)
-#define _GM(d) (((1 << _GZ(d)) - 1) << _GS(d))
+#define _GM(d) (((1U << _GZ(d)) - 1) << _GS(d))
 #define _BZ(d) (d - _RZ(d) - _GZ(d))
 #define _BS(d) (_RZ(d) + _GZ(d))
-#define _BM(d) (((1 << _BZ(d)) - 1) << _BS(d))
-#define _CE(d) (1 << _RZ(d))
+#define _BM(d) (((1U << _BZ(d)) - 1) << _BS(d))
+#define _CE(d) (1U << _RZ(d))
 
 typedef struct _miVisuals {
     struct _miVisuals *next;
@@ -416,7 +416,7 @@ maskShift(Pixel p)
 
 /*
  * Given a list of formats for a screen, create a list
- * of visuals and depths for the screen which corespond to
+ * of visuals and depths for the screen which correspond to
  * the set which can be used with this version of cfb.
  */
 
@@ -458,9 +458,9 @@ miInitVisuals(VisualPtr * visualp, DepthPtr * depthp, int *nvisualp,
         ndepth++;
         nvisual += visuals->count;
     }
-    depth = malloc(ndepth * sizeof(DepthRec));
-    visual = malloc(nvisual * sizeof(VisualRec));
-    preferredCVCs = malloc(ndepth * sizeof(int));
+    depth = xallocarray(ndepth, sizeof(DepthRec));
+    visual = xallocarray(nvisual, sizeof(VisualRec));
+    preferredCVCs = xallocarray(ndepth, sizeof(int));
     if (!depth || !visual || !preferredCVCs) {
         free(depth);
         free(visual);
@@ -481,7 +481,7 @@ miInitVisuals(VisualPtr * visualp, DepthPtr * depthp, int *nvisualp,
         prefp++;
         vid = NULL;
         if (nvtype) {
-            vid = malloc(nvtype * sizeof(VisualID));
+            vid = xallocarray(nvtype, sizeof(VisualID));
             if (!vid) {
                 free(depth);
                 free(visual);

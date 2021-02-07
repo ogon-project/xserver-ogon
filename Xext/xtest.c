@@ -57,9 +57,10 @@
 
 #include "extinit.h"
 
-/* XTest events are sent during request processing and may be interruped by
+/* XTest events are sent during request processing and may be interrupted by
  * a SIGIO. We need a separate event list to avoid events overwriting each
- * other's memory */
+ * other's memory.
+ */
 static InternalEvent *xtest_evlist;
 
 /**
@@ -421,7 +422,7 @@ ProcXTestFakeInput(ClientPtr client)
     case KeyPress:
     case KeyRelease:
         nevents =
-            GetKeyboardEvents(xtest_evlist, dev, type, ev->u.u.detail, NULL);
+            GetKeyboardEvents(xtest_evlist, dev, type, ev->u.u.detail);
         break;
     }
 
@@ -468,7 +469,7 @@ ProcXTestDispatch(ClientPtr client)
     }
 }
 
-static int
+static int _X_COLD
 SProcXTestGetVersion(ClientPtr client)
 {
     REQUEST(xXTestGetVersionReq);
@@ -479,7 +480,7 @@ SProcXTestGetVersion(ClientPtr client)
     return ProcXTestGetVersion(client);
 }
 
-static int
+static int _X_COLD
 SProcXTestCompareCursor(ClientPtr client)
 {
     REQUEST(xXTestCompareCursorReq);
@@ -491,7 +492,7 @@ SProcXTestCompareCursor(ClientPtr client)
     return ProcXTestCompareCursor(client);
 }
 
-static int
+static int _X_COLD
 XTestSwapFakeInput(ClientPtr client, xReq * req)
 {
     int nev;
@@ -514,7 +515,7 @@ XTestSwapFakeInput(ClientPtr client, xReq * req)
     return Success;
 }
 
-static int
+static int _X_COLD
 SProcXTestFakeInput(ClientPtr client)
 {
     int n;
@@ -528,7 +529,7 @@ SProcXTestFakeInput(ClientPtr client)
     return ProcXTestFakeInput(client);
 }
 
-static int
+static int _X_COLD
 SProcXTestGrabControl(ClientPtr client)
 {
     REQUEST(xXTestGrabControlReq);
@@ -538,7 +539,7 @@ SProcXTestGrabControl(ClientPtr client)
     return ProcXTestGrabControl(client);
 }
 
-static int
+static int _X_COLD
 SProcXTestDispatch(ClientPtr client)
 {
     REQUEST(xReq);

@@ -58,7 +58,7 @@
  * EAX & 0xff  === AL
  * EAX & 0xffff == AX
  *
- * etc.  The result is that alot of the calculations can then be
+ * etc.  The result is that a lot of the calculations can then be
  * done using the native instruction set fully.
  */
 
@@ -148,14 +148,6 @@ struct i386_segment_regs {
 #define R_EBX  gen.B.I32_reg.e_reg
 #define R_ECX  gen.C.I32_reg.e_reg
 #define R_EDX  gen.D.I32_reg.e_reg
-
-/* special registers */
-#define R_SP  spc.SP.I16_reg.x_reg
-#define R_BP  spc.BP.I16_reg.x_reg
-#define R_SI  spc.SI.I16_reg.x_reg
-#define R_DI  spc.DI.I16_reg.x_reg
-#define R_IP  spc.IP.I16_reg.x_reg
-#define R_FLG spc.FLAGS
 
 /* special registers */
 #define R_SP  spc.SP.I16_reg.x_reg

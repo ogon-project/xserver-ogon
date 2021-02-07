@@ -102,9 +102,9 @@ static char *supported_drivers[] = {
 };
 
 /*
- * Functions to probe for the existance of a supported console driver.
+ * Functions to probe for the existence of a supported console driver.
  * Any function returns either a valid file descriptor (driver probed
- * succesfully), -1 (driver not found), or uses FatalError() if the
+ * successfully), -1 (driver not found), or uses FatalError() if the
  * driver was found but proved to not support the required mode to run
  * an X server.
  */
@@ -131,7 +131,7 @@ static int xf86OpenWScons(void);
  * The sequence of the driver probes is important; start with the
  * driver that is best distinguishable, and end with the most generic
  * driver.  (Otherwise, pcvt would also probe as syscons, and either
- * pcvt or syscons might succesfully probe as pccons.)
+ * pcvt or syscons might successfully probe as pccons.)
  */
 static xf86ConsOpen_t xf86ConsTab[] = {
 #ifdef PCVT_SUPPORT
@@ -192,7 +192,7 @@ xf86OpenConsole()
         /* Check that a supported console driver was found */
         if (fd < 0) {
             char cons_drivers[80] = { 0, };
-            for (i = 0; i < sizeof(supported_drivers) / sizeof(char *); i++) {
+            for (i = 0; i < ARRAY_SIZE(supported_drivers); i++) {
                 if (i) {
                     strcat(cons_drivers, ", ");
                 }
@@ -269,7 +269,7 @@ xf86OpenConsole()
                             "xf86OpenConsole: VT_WAITACTIVE failed\n");
                 }
 
-                signal(SIGUSR1, xf86VTRequest);
+                OsSignal(SIGUSR1, xf86VTRequest);
 
                 vtmode.mode = VT_PROCESS;
                 vtmode.relsig = SIGUSR1;
@@ -659,5 +659,11 @@ xf86UseMsg()
 #endif                          /* SYSCONS_SUPPORT || PCVT_SUPPORT */
     ErrorF("-keeptty               ");
     ErrorF("don't detach controlling tty (for debugging only)\n");
+    return;
+}
+
+void
+xf86OSInputThreadInit(void)
+{
     return;
 }

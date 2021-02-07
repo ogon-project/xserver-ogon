@@ -131,8 +131,8 @@ xf86XVRegisterGenericAdaptorDriver(xf86XVInitGenericAdaptorPtr InitFunc)
 {
     xf86XVInitGenericAdaptorPtr *newdrivers;
 
-    newdrivers = realloc(GenDrivers, sizeof(xf86XVInitGenericAdaptorPtr) *
-                         (1 + NumGenDrivers));
+    newdrivers = reallocarray(GenDrivers, 1 + NumGenDrivers,
+                              sizeof(xf86XVInitGenericAdaptorPtr));
     if (!newdrivers)
         return 0;
     GenDrivers = newdrivers;
@@ -159,7 +159,7 @@ xf86XVListGenericAdaptors(ScrnInfoPtr pScrn, XF86VideoAdaptorPtr ** adaptors)
         n = (*GenDrivers[i]) (pScrn, &DrivAdap);
         if (0 == n)
             continue;
-        new = realloc(*adaptors, sizeof(XF86VideoAdaptorPtr) * (num + n));
+        new = reallocarray(*adaptors, num + n, sizeof(XF86VideoAdaptorPtr));
         if (NULL == new)
             continue;
         *adaptors = new;
@@ -436,8 +436,8 @@ xf86XVInitAdaptors(ScreenPtr pScreen, XF86VideoAdaptorPtr * infoPtr, int number)
                         void *moreSpace;
 
                         totFormat *= 2;
-                        moreSpace = realloc(pFormat,
-                                            totFormat * sizeof(XvFormatRec));
+                        moreSpace = reallocarray(pFormat, totFormat,
+                                                 sizeof(XvFormatRec));
                         if (!moreSpace)
                             break;
                         pFormat = moreSpace;
@@ -544,7 +544,7 @@ xf86XVInitAdaptors(ScreenPtr pScreen, XF86VideoAdaptorPtr * infoPtr, int number)
    client clip from the GC when the video is initialized.  We then
    use xf86XVUpdateCompositeClip to calculate the new composite clip
    when we need it.  This is different from what DEC did.  They saved
-   the GC and used it's clip list when they needed to reclip the window,
+   the GC and used its clip list when they needed to reclip the window,
    even if the client clip was different from the one the video was
    initialized with.  If the original GC was destroyed, they had to stop
    the video.  I like the new method better (MArk).

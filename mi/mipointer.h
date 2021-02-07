@@ -100,7 +100,7 @@ miPointerSetScreen(DeviceIntPtr pDev, int screen_num, int x, int y);
 extern _X_EXPORT void
 miPointerGetPosition(DeviceIntPtr pDev, int *x, int *y);
 
-/* Moves the cursor to the specified position.  May clip the co-ordinates:
+/* Moves the cursor to the specified position.  May clip the coordinates:
  * x and y are modified in-place. */
 extern _X_EXPORT ScreenPtr
 miPointerSetPosition(DeviceIntPtr pDev, int mode, double *x, double *y,
@@ -108,6 +108,12 @@ miPointerSetPosition(DeviceIntPtr pDev, int mode, double *x, double *y,
 
 extern _X_EXPORT void
 miPointerUpdateSprite(DeviceIntPtr pDev);
+
+/* Invalidate current sprite, forcing reload on next
+ * sprite setting (window crossing, grab action, etc)
+ */
+extern _X_EXPORT void
+miPointerInvalidateSprite(DeviceIntPtr pDev);
 
 /* Sets whether the sprite should be updated immediately on pointer moves */
 extern _X_EXPORT Bool

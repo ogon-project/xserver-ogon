@@ -132,7 +132,7 @@ typedef struct _DMXConfigWall {
     int width, height;          /* dimensions of displays */
     int xwall, ywall;           /* dimensions of wall, in tiles */
 
-    /* Raw configuration informaiton */
+    /* Raw configuration information */
     DMXConfigTokenPtr start;
     DMXConfigPairPtr wallDim;
     DMXConfigPairPtr displayDim;
@@ -145,7 +145,7 @@ typedef struct _DMXConfigOption {
     /* Summary information */
     char *string;
 
-    /* Raw configuration informaiton */
+    /* Raw configuration information */
     DMXConfigTokenPtr start;
     DMXConfigStringPtr option;
     DMXConfigTokenPtr end;
@@ -200,8 +200,6 @@ typedef struct _DMXConfigEntry {
 
 extern DMXConfigEntryPtr dmxConfigEntry;
 
-extern int yylex(void);
-extern int yydebug;
 extern void yyerror(const char *message);
 
 extern void dmxConfigLog(const char *format, ...) _X_ATTRIBUTE_PRINTF(1,0);

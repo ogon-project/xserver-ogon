@@ -1,4 +1,3 @@
-
 /*
  *Copyright (C) 2003-2004 Harold L Hunt II All Rights Reserved.
  *
@@ -32,26 +31,28 @@
 #ifndef WINCLIPBOARD_INTERNAL_H
 #define WINCLIPBOARD_INTERNAL_H
 
-/* X headers */
-#include <X11/Xlib.h>
+#include <xcb/xproto.h>
+#include <X11/Xfuncproto.h> // for _X_ATTRIBUTE_PRINTF
+#include <X11/Xmd.h> // for BOOL
 
 /* Windows headers */
 #include <X11/Xwindows.h>
 
-#define WIN_XEVENTS_SUCCESS			0
+#define WIN_XEVENTS_SUCCESS			0  // more like 'CONTINUE'
 #define WIN_XEVENTS_FAILED			1
 #define WIN_XEVENTS_NOTIFY_DATA			3
 #define WIN_XEVENTS_NOTIFY_TARGETS		4
 
-#define WM_WM_REINIT                           (WM_USER + 1)
 #define WM_WM_QUIT                             (WM_USER + 2)
+
+#define ARRAY_SIZE(a)  (sizeof((a)) / sizeof((a)[0]))
 
 /*
  * References to external symbols
  */
 
-extern void winDebug(const char *format, ...);
-extern void ErrorF(const char *format, ...);
+extern void winDebug(const char *format, ...) _X_ATTRIBUTE_PRINTF(1, 2);
+extern void ErrorF(const char *format, ...) _X_ATTRIBUTE_PRINTF(1, 2);
 
 /*
  * winclipboardtextconv.c
@@ -67,29 +68,29 @@ void
  * winclipboardthread.c
  */
 
-
 typedef struct
 {
-    Atom atomClipboard;
-    Atom atomLocalProperty;
-    Atom atomUTF8String;
-    Atom atomCompoundText;
-    Atom atomTargets;
+    xcb_atom_t atomClipboard;
+    xcb_atom_t atomLocalProperty;
+    xcb_atom_t atomUTF8String;
+    xcb_atom_t atomCompoundText;
+    xcb_atom_t atomTargets;
+    xcb_atom_t atomIncr;
 } ClipboardAtoms;
 
 /*
  * winclipboardwndproc.c
  */
 
-Bool winClipboardFlushWindowsMessageQueue(HWND hwnd);
+BOOL winClipboardFlushWindowsMessageQueue(HWND hwnd);
 
 LRESULT CALLBACK
 winClipboardWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
 typedef struct
 {
-  Display *pClipboardDisplay;
-  Window iClipboardWindow;
+  xcb_connection_t *pClipboardDisplay;
+  xcb_window_t iClipboardWindow;
   ClipboardAtoms *atoms;
 } ClipboardWindowCreationParams;
 
@@ -99,16 +100,17 @@ typedef struct
 
 typedef struct
 {
-  Bool fUseUnicode;
-  Atom *targetList;
+  xcb_atom_t *targetList;
+  unsigned char *incr;
+  unsigned long int incrsize;
 } ClipboardConversionData;
 
 int
 winClipboardFlushXEvents(HWND hwnd,
-                         Window iWindow, Display * pDisplay, ClipboardConversionData *data, ClipboardAtoms *atom);
+                         xcb_window_t iWindow, xcb_connection_t * pDisplay,
+                         ClipboardConversionData *data, ClipboardAtoms *atoms);
 
-
-Atom
+xcb_atom_t
 winClipboardGetLastOwnedSelectionAtom(ClipboardAtoms *atoms);
 
 void

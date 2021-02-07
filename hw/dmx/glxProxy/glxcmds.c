@@ -39,7 +39,6 @@
 #include "dmxsync.h"
 
 #include "glxserver.h"
-#include <GL/glxtokens.h>
 #include "g_disptab.h"
 #include <pixmapstr.h>
 #include <windowstr.h>
@@ -284,12 +283,15 @@ CreateContext(__GLXclientState * cl,
      * allocate memory for back-end servers info
      */
     num_be_screens = to_screen - from_screen + 1;
-    glxc->real_ids = (XID *) malloc(sizeof(XID) * num_be_screens);
+    glxc->real_ids = xallocarray(num_be_screens, sizeof(XID));
     if (!glxc->real_ids) {
+        free(glxc);
         return BadAlloc;
     }
-    glxc->real_vids = (XID *) malloc(sizeof(XID) * num_be_screens);
+    glxc->real_vids = xallocarray(num_be_screens, sizeof(XID));
     if (!glxc->real_vids) {
+        free(glxc->real_ids);
+        free(glxc);
         return BadAlloc;
     }
 
@@ -685,22 +687,16 @@ AddCurrentContext(__GLXclientState * cl, __GLXcontext * glxc, DrawablePtr pDraw)
     if (!num) {
         table = (__GLXcontext **) malloc(sizeof(__GLXcontext *));
         cl->currentDrawables = (DrawablePtr *) malloc(sizeof(DrawablePtr));
-        cl->be_currentCTag =
-            (GLXContextTag *) malloc(screenInfo.numScreens *
-                                     sizeof(GLXContextTag));
+        cl->be_currentCTag = xallocarray(screenInfo.numScreens,
+                                         sizeof(GLXContextTag));
     }
     else {
-        table = (__GLXcontext **) realloc(table,
-                                          (num + 1) * sizeof(__GLXcontext *));
-        cl->currentDrawables = (DrawablePtr *) realloc(cl->currentDrawables,
-                                                       (num +
-                                                        1) *
-                                                       sizeof(DrawablePtr));
-        cl->be_currentCTag =
-            (GLXContextTag *) realloc(cl->be_currentCTag,
-                                      (num +
-                                       1) * screenInfo.numScreens *
-                                      sizeof(GLXContextTag));
+        table = reallocarray(table, num + 1, sizeof(__GLXcontext *));
+        cl->currentDrawables = reallocarray(cl->currentDrawables, num + 1,
+                                            sizeof(DrawablePtr));
+        cl->be_currentCTag = reallocarray(cl->be_currentCTag,
+                                          (num + 1) * screenInfo.numScreens,
+                                          sizeof(GLXContextTag));
     }
     table[num] = glxc;
     cl->currentDrawables[num] = pDraw;
@@ -726,7 +722,7 @@ ChangeCurrentContext(__GLXclientState * cl, __GLXcontext * glxc,
 }
 
 /*
-** Given a tag, and back-end screen number, retrives the current back-end
+** Given a tag, and back-end screen number, retrieves the current back-end
 ** tag.
 */
 int
@@ -1896,7 +1892,7 @@ CreateGLXPixmap(__GLXclientState * cl,
     if (!pGlxPixmap) {
         return BadAlloc;
     }
-    pGlxPixmap->be_xids = (XID *) malloc(sizeof(XID) * screenInfo.numScreens);
+    pGlxPixmap->be_xids = xallocarray(screenInfo.numScreens, sizeof(XID));
     if (!pGlxPixmap->be_xids) {
         free(pGlxPixmap);
         return BadAlloc;
@@ -2016,11 +2012,8 @@ CreateGLXPixmap(__GLXclientState * cl,
         XFlush(dpy);
     }
 
-    if (!(AddResource(glxpixmapId, __glXPixmapRes, pGlxPixmap))) {
-        free(pGlxPixmap->be_xids);
-        free(pGlxPixmap);
+    if (!(AddResource(glxpixmapId, __glXPixmapRes, pGlxPixmap)))
         return BadAlloc;
-    }
 
     return Success;
 }
@@ -3356,7 +3349,7 @@ __glXCreatePbuffer(__GLXclientState * cl, GLbyte * pc)
         return BadAlloc;
     }
 
-    pGlxPbuffer->be_xids = (XID *) malloc(sizeof(XID) * screenInfo.numScreens);
+    pGlxPbuffer->be_xids = xallocarray(screenInfo.numScreens, sizeof(XID));
     if (!pGlxPbuffer->be_xids) {
         free(pGlxPbuffer);
         return BadAlloc;
@@ -3617,13 +3610,13 @@ __glXGetDrawableAttributes(__GLXclientState * cl, GLbyte * pc)
     }
 
     if (reply.numAttribs) {
-        attribs_size = 2 * reply.numAttribs * __GLX_SIZE_CARD32;
-        attribs = (CARD32 *) malloc(attribs_size);
+        attribs = xallocarray(reply.numAttribs, 2 * __GLX_SIZE_CARD32);
         if (attribs == NULL) {
             UnlockDisplay(dpy);
             SyncHandle();
             return BadAlloc;
         }
+        attribs_size = 2 * reply.numAttribs * __GLX_SIZE_CARD32;
 
         _XRead(dpy, (char *) attribs, attribs_size);
     }

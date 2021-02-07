@@ -56,7 +56,30 @@ SOFTWARE.
 #include "xkbrules.h"
 #include "events.h"
 #include "list.h"
+#include "os.h"
 #include <X11/extensions/XI2.h>
+
+#define DEFAULT_KEYBOARD_CLICK 	0
+#define DEFAULT_BELL		50
+#define DEFAULT_BELL_PITCH	400
+#define DEFAULT_BELL_DURATION	100
+#define DEFAULT_AUTOREPEAT	TRUE
+#define DEFAULT_AUTOREPEATS	{\
+        0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,\
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,\
+        0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,\
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+
+#define DEFAULT_LEDS		0x0     /* all off */
+#define DEFAULT_LEDS_MASK	0xffffffff      /* 32 */
+#define DEFAULT_INT_RESOLUTION		1000
+#define DEFAULT_INT_MIN_VALUE		0
+#define DEFAULT_INT_MAX_VALUE		100
+#define DEFAULT_INT_DISPLAYED		0
+
+#define DEFAULT_PTR_NUMERATOR	2
+#define DEFAULT_PTR_DENOMINATOR	1
+#define DEFAULT_PTR_THRESHOLD	4
 
 #define DEVICE_INIT	0
 #define DEVICE_ON	1
@@ -236,6 +259,8 @@ typedef struct _InputAttributes {
 #define ATTR_TABLET (1<<3)
 #define ATTR_TOUCHPAD (1<<4)
 #define ATTR_TOUCHSCREEN (1<<5)
+#define ATTR_KEY (1<<6)
+#define ATTR_TABLET_PAD (1<<7)
 
 /* Key/Button has been run through all input processing and events sent to clients. */
 #define KEY_PROCESSED 1
@@ -412,9 +437,6 @@ extern void ProcessPointerEvent(InternalEvent * /* ev */ ,
 extern void ProcessKeyboardEvent(InternalEvent * /*ev */ ,
                                  DeviceIntPtr /*keybd */ );
 
-extern Bool LegalModifier(unsigned int /*key */ ,
-                          DeviceIntPtr /*pDev */ );
-
 extern _X_EXPORT void ProcessInputEvents(void);
 
 extern _X_EXPORT void InitInput(int /*argc */ ,
@@ -448,12 +470,11 @@ extern _X_EXPORT void QueuePointerEvents(DeviceIntPtr pDev,
 extern _X_EXPORT int GetKeyboardEvents(InternalEvent *events,
                                        DeviceIntPtr pDev,
                                        int type,
-                                       int key_code, const ValuatorMask *mask);
+                                       int key_code);
 
 extern _X_EXPORT void QueueKeyboardEvents(DeviceIntPtr pDev,
                                           int type,
-                                          int key_code,
-                                          const ValuatorMask *mask);
+                                          int key_code);
 
 extern int GetTouchEvents(InternalEvent *events,
                           DeviceIntPtr pDev,
@@ -528,25 +549,27 @@ extern int AllocXTestDevice(ClientPtr client, const char *name,
 extern BOOL IsXTestDevice(DeviceIntPtr dev, DeviceIntPtr master);
 extern DeviceIntPtr GetXTestDevice(DeviceIntPtr master);
 extern void SendDevicePresenceEvent(int deviceid, int type);
+extern void DeliverDeviceClassesChangedEvent(int sourceid, Time time);
 extern _X_EXPORT InputAttributes *DuplicateInputAttributes(InputAttributes *
                                                            attrs);
 extern _X_EXPORT void FreeInputAttributes(InputAttributes * attrs);
 
 enum TouchListenerState {
-    LISTENER_AWAITING_BEGIN = 0,   /**< Waiting for a TouchBegin event */
-    LISTENER_AWAITING_OWNER,       /**< Waiting for a TouchOwnership event */
-    LISTENER_EARLY_ACCEPT,         /**< Waiting for ownership, has already
-                                        accepted */
-    LISTENER_IS_OWNER,             /**< Is the current owner, hasn't accepted */
-    LISTENER_HAS_ACCEPTED,         /**< Is the current owner, has accepted */
-    LISTENER_HAS_END,              /**< Has already received the end event */
+    TOUCH_LISTENER_AWAITING_BEGIN = 0, /**< Waiting for a TouchBegin event */
+    TOUCH_LISTENER_AWAITING_OWNER,     /**< Waiting for a TouchOwnership event */
+    TOUCH_LISTENER_EARLY_ACCEPT,       /**< Waiting for ownership, has already
+                                            accepted */
+    TOUCH_LISTENER_IS_OWNER,           /**< Is the current owner, hasn't
+                                            accepted */
+    TOUCH_LISTENER_HAS_ACCEPTED,       /**< Is the current owner, has accepted */
+    TOUCH_LISTENER_HAS_END,            /**< Has already received the end event */
 };
 
 enum TouchListenerType {
-    LISTENER_GRAB,
-    LISTENER_POINTER_GRAB,
-    LISTENER_REGULAR,
-    LISTENER_POINTER_REGULAR,
+    TOUCH_LISTENER_GRAB,
+    TOUCH_LISTENER_POINTER_GRAB,
+    TOUCH_LISTENER_REGULAR,
+    TOUCH_LISTENER_POINTER_REGULAR,
 };
 
 extern void TouchInitDDXTouchPoint(DeviceIntPtr dev,
@@ -591,8 +614,6 @@ extern int TouchListenerAcceptReject(DeviceIntPtr dev, TouchPointInfoPtr ti,
 extern int TouchAcceptReject(ClientPtr client, DeviceIntPtr dev, int mode,
                              uint32_t touchid, Window grab_window, XID *error);
 extern void TouchEndPhysicallyActiveTouches(DeviceIntPtr dev);
-extern void TouchDeliverDeviceClassesChangedEvent(TouchPointInfoPtr ti,
-                                                  Time time, XID resource);
 extern void TouchEmitTouchEnd(DeviceIntPtr dev, TouchPointInfoPtr ti, int flags, XID resource);
 extern void TouchAcceptAndEnd(DeviceIntPtr dev, int touchid);
 
@@ -609,6 +630,9 @@ extern WindowPtr XYToWindow(SpritePtr pSprite, int x, int y);
 extern int EventIsDeliverable(DeviceIntPtr dev, int evtype, WindowPtr win);
 extern Bool ActivatePassiveGrab(DeviceIntPtr dev, GrabPtr grab,
                                 InternalEvent *ev, InternalEvent *real_event);
+extern void ActivateGrabNoDelivery(DeviceIntPtr dev, GrabPtr grab,
+                                   InternalEvent *event,
+                                   InternalEvent *real_event);
 /**
  * Masks specifying the type of event to deliver for an InternalEvent; used
  * by EventIsDeliverable.
@@ -633,6 +657,7 @@ extern _X_EXPORT int NewInputDeviceRequest(InputOption *options,
                                            InputAttributes * attrs,
                                            DeviceIntPtr *dev);
 extern _X_EXPORT void DeleteInputDeviceRequest(DeviceIntPtr dev);
+extern _X_EXPORT void RemoveInputDeviceTraces(const char *config_info);
 
 extern _X_EXPORT void DDXRingBell(int volume, int pitch, int duration);
 
@@ -673,6 +698,24 @@ extern _X_EXPORT Bool valuator_mask_fetch(const ValuatorMask *mask,
                                           int valnum, int *val);
 extern _X_EXPORT Bool valuator_mask_fetch_double(const ValuatorMask *mask,
                                                  int valnum, double *val);
+extern _X_EXPORT Bool valuator_mask_has_unaccelerated(const ValuatorMask *mask);
+extern _X_EXPORT void valuator_mask_set_unaccelerated(ValuatorMask *mask,
+                                                      int valuator,
+                                                      double accel,
+                                                      double unaccel);
+extern _X_EXPORT void valuator_mask_set_absolute_unaccelerated(ValuatorMask *mask,
+                                                               int valuator,
+                                                               int absolute,
+                                                               double unaccel);
+extern _X_EXPORT double valuator_mask_get_accelerated(const ValuatorMask *mask,
+                                                      int valuator);
+extern _X_EXPORT double valuator_mask_get_unaccelerated(const ValuatorMask *mask,
+                                                        int valuator);
+extern _X_EXPORT Bool valuator_mask_fetch_unaccelerated(const ValuatorMask *mask,
+                                                        int valuator,
+                                                        double *accel,
+                                                        double *unaccel);
+extern _X_HIDDEN void valuator_mask_drop_unaccelerated(ValuatorMask *mask);
 
 /* InputOption handling interface */
 extern _X_EXPORT InputOption *input_option_new(InputOption *list,
@@ -697,5 +740,22 @@ extern _X_HIDDEN void input_constrain_cursor(DeviceIntPtr pDev, ScreenPtr screen
                                              int dest_x, int dest_y,
                                              int *out_x, int *out_y,
                                              int *nevents, InternalEvent* events);
+
+extern _X_EXPORT void input_lock(void);
+extern _X_EXPORT void input_unlock(void);
+extern _X_EXPORT void input_force_unlock(void);
+extern _X_EXPORT int in_input_thread(void);
+
+extern void InputThreadPreInit(void);
+extern void InputThreadInit(void);
+extern void InputThreadFini(void);
+
+extern int InputThreadRegisterDev(int fd,
+                                  NotifyFdProcPtr readInputProc,
+                                  void *readInputArgs);
+
+extern int InputThreadUnregisterDev(int fd);
+
+extern _X_EXPORT Bool InputThreadEnable;
 
 #endif                          /* INPUT_H */

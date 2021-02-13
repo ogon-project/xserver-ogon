@@ -95,10 +95,11 @@ Equipment Corporation.
 #include "cursorstr.h"
 #include "selection.h"
 #include <X11/fonts/font.h>
+#include <X11/fonts/fontstruct.h>
+#include <X11/fonts/libxfont2.h>
 #include "opaque.h"
 #include "servermd.h"
 #include "hotplug.h"
-#include "site.h"
 #include "dixfont.h"
 #include "extnsionst.h"
 #include "privates.h"
@@ -118,14 +119,7 @@ Equipment Corporation.
 
 extern void Dispatch(void);
 
-#ifdef XQUARTZ
-#include <pthread.h>
-
-BOOL serverRunning = FALSE;
-pthread_mutex_t serverRunningMutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t serverRunningCond = PTHREAD_COND_INITIALIZER;
-
-#endif
+CallbackListPtr RootWindowFinalizeCallback = NULL;
 
 int
 dix_main(int argc, char *argv[], char *envp[])
@@ -141,8 +135,6 @@ dix_main(int argc, char *argv[], char *envp[])
 
     CheckUserAuthorization();
 
-    InitConnectionLimits();
-
     ProcessCommandLine(argc, argv);
 
     alwaysCheckForInput[0] = 0;
@@ -153,17 +145,13 @@ dix_main(int argc, char *argv[], char *envp[])
         ScreenSaverInterval = defaultScreenSaverInterval;
         ScreenSaverBlanking = defaultScreenSaverBlanking;
         ScreenSaverAllowExposures = defaultScreenSaverAllowExposures;
-#ifdef DPMSExtension
-        DPMSStandbyTime = DPMSSuspendTime = DPMSOffTime = ScreenSaverTime;
-        DPMSEnabled = TRUE;
-        DPMSPowerLevel = 0;
-#endif
+
         InitBlockAndWakeupHandlers();
         /* Perform any operating system dependent initializations you'd like */
         OsInit();
         if (serverGeneration == 1) {
             CreateWellKnownSockets();
-            for (i = 1; i < MAXCLIENTS; i++)
+            for (i = 1; i < LimitClients; i++)
                 clients[i] = NullClient;
             serverClient = calloc(sizeof(ClientRec), 1);
             if (!serverClient)
@@ -195,9 +183,9 @@ dix_main(int argc, char *argv[], char *envp[])
 
         InitAtoms();
         InitEvents();
-        InitGlyphCaching();
+        xfont2_init_glyph_caching();
         dixResetRegistry();
-        ResetFontPrivateIndex();
+        InitFonts();
         InitCallbackManager();
         InitOutput(&screenInfo, argc, argv);
 
@@ -228,28 +216,20 @@ dix_main(int argc, char *argv[], char *envp[])
                 FatalError("failed to create default stipple");
             if (!CreateRootWindow(pScreen))
                 FatalError("failed to create root window");
+            CallCallbacks(&RootWindowFinalizeCallback, pScreen);
         }
 
-        InitFonts();
         if (SetDefaultFontPath(defaultFontPath) != Success) {
             ErrorF("[dix] failed to set default font path '%s'",
                    defaultFontPath);
         }
-        if (!SetDefaultFont(defaultTextFont)) {
-            FatalError("could not open default font '%s'", defaultTextFont);
+        if (!SetDefaultFont("fixed")) {
+            FatalError("could not open default font");
         }
 
         if (!(rootCursor = CreateRootCursor(NULL, 0))) {
-            FatalError("could not open default cursor font '%s'",
-                       defaultCursorFont);
+            FatalError("could not open default cursor font");
         }
-
-#ifdef DPMSExtension
-        /* check all screens, looking for DPMS Capabilities */
-        DPMSCapableFlag = DPMSSupported();
-        if (!DPMSCapableFlag)
-            DPMSEnabled = FALSE;
-#endif
 
 #ifdef PANORAMIX
         /*
@@ -285,24 +265,11 @@ dix_main(int argc, char *argv[], char *envp[])
             }
         }
 
-#ifdef XQUARTZ
-        /* Let the other threads know the server is done with its init */
-        pthread_mutex_lock(&serverRunningMutex);
-        serverRunning = TRUE;
-        pthread_cond_broadcast(&serverRunningCond);
-        pthread_mutex_unlock(&serverRunningMutex);
-#endif
-
         NotifyParentProcess();
 
-        Dispatch();
+        InputThreadInit();
 
-#ifdef XQUARTZ
-        /* Let the other threads know the server is no longer running */
-        pthread_mutex_lock(&serverRunningMutex);
-        serverRunning = FALSE;
-        pthread_mutex_unlock(&serverRunningMutex);
-#endif
+        Dispatch();
 
         UndisplayDevices();
         DisableAllDevices();
@@ -326,6 +293,8 @@ dix_main(int argc, char *argv[], char *envp[])
 #endif
 
         CloseInput();
+
+        InputThreadFini();
 
         for (i = 0; i < screenInfo.numScreens; i++)
             screenInfo.screens[i]->root = NullWindow;
@@ -368,6 +337,8 @@ dix_main(int argc, char *argv[], char *envp[])
         FreeAuditTimer();
 
         DeleteCallbackManager();
+
+        ClearWorkQueue();
 
         if (dispatchException & DE_TERMINATE) {
             CloseWellKnownConnections();

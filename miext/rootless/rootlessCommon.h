@@ -94,6 +94,7 @@ typedef struct _RootlessScreenRec {
     ChangeBorderWidthProcPtr ChangeBorderWidth;
     PositionWindowProcPtr PositionWindow;
     ChangeWindowAttributesProcPtr ChangeWindowAttributes;
+    PaintWindowProcPtr PaintWindow;
 
     CreateGCProcPtr CreateGC;
     CopyWindowProcPtr CopyWindow;
@@ -268,7 +269,7 @@ void RootlessFlushScreenColormaps(ScreenPtr pScreen);
 // Move a window to its proper location on the screen.
 void RootlessRepositionWindow(WindowPtr pWin);
 
-// Move the window to it's correct place in the physical stacking order.
+// Move the window to its correct place in the physical stacking order.
 void RootlessReorderWindow(WindowPtr pWin);
 
 void RootlessScreenExpose(ScreenPtr pScreen);

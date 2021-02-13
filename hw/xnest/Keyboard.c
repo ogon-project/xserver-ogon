@@ -22,7 +22,6 @@ is" without express or implied warranty.
 
 #include <X11/X.h>
 #include <X11/Xproto.h>
-#include <xcb/xcb_keysyms.h>
 #include <X11/keysym.h>
 #include "screenint.h"
 #include "inputstr.h"
@@ -138,7 +137,7 @@ xnestKeyboardProc(DeviceIntPtr pDev, int onoff)
                                            max_keycode - min_keycode + 1,
                                            &mapWidth);
             len = (max_keycode - min_keycode + 1) * mapWidth;
-            keymap = (KeySym *) malloc(len * sizeof(KeySym));
+            keymap = xallocarray(len, sizeof(KeySym));
             for (i = 0; i < len; ++i)
                 keymap[i] = keymap64[i];
             XFree(keymap64);
@@ -218,12 +217,6 @@ xnestKeyboardProc(DeviceIntPtr pDev, int onoff)
     return Success;
 }
 
-Bool
-LegalModifier(unsigned int key, DeviceIntPtr pDev)
-{
-    return TRUE;
-}
-
 void
 xnestUpdateModifierState(unsigned int state)
 {
@@ -245,14 +238,13 @@ xnestUpdateModifierState(unsigned int state)
     for (i = 0, mask = 1; i < 8; i++, mask <<= 1) {
         int key;
 
-        /* Modifier is down, but shouldn't be
-         */
+        /* Modifier is down, but shouldn't be */
         if ((xkb_state & mask) && !(state & mask)) {
             int count = keyc->modifierKeyCount[i];
 
             for (key = 0; key < MAP_LENGTH; key++)
                 if (keyc->xkbInfo->desc->map->modmap[key] & mask) {
-                    if (mask == XCB_MOD_MASK_LOCK) {
+                    if (mask == LockMask) {
                         xnestQueueKeyEvent(KeyPress, key);
                         xnestQueueKeyEvent(KeyRelease, key);
                     }
@@ -264,13 +256,12 @@ xnestUpdateModifierState(unsigned int state)
                 }
         }
 
-        /* Modifier shoud be down, but isn't
-         */
+        /* Modifier should be down, but isn't */
         if (!(xkb_state & mask) && (state & mask))
             for (key = 0; key < MAP_LENGTH; key++)
                 if (keyc->xkbInfo->desc->map->modmap[key] & mask) {
                     xnestQueueKeyEvent(KeyPress, key);
-                    if (mask == XCB_MOD_MASK_LOCK)
+                    if (mask == LockMask)
                         xnestQueueKeyEvent(KeyRelease, key);
                     break;
                 }

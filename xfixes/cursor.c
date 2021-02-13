@@ -61,7 +61,6 @@
 static RESTYPE CursorClientType;
 static RESTYPE CursorHideCountType;
 static RESTYPE CursorWindowType;
-static CursorPtr CursorCurrent[MAXDEVICES];
 
 static DevPrivateKeyRec CursorScreenPrivateKeyRec;
 
@@ -132,10 +131,29 @@ typedef struct _CursorScreen {
 Bool CursorVisible = FALSE;
 Bool EnableCursor = TRUE;
 
+static CursorPtr
+CursorForDevice(DeviceIntPtr pDev)
+{
+    if (pDev && pDev->spriteInfo && pDev->spriteInfo->sprite) {
+        if (pDev->spriteInfo->anim.pCursor)
+            return pDev->spriteInfo->anim.pCursor;
+        return pDev->spriteInfo->sprite->current;
+    }
+
+    return NULL;
+}
+
+static CursorPtr
+CursorForClient(ClientPtr client)
+{
+    return CursorForDevice(PickPointer(client));
+}
+
 static Bool
 CursorDisplayCursor(DeviceIntPtr pDev, ScreenPtr pScreen, CursorPtr pCursor)
 {
     CursorScreenPtr cs = GetCursorScreen(pScreen);
+    CursorPtr pOldCursor = CursorForDevice(pDev);
     Bool ret;
     DisplayCursorProcPtr backupProc;
 
@@ -150,10 +168,10 @@ CursorDisplayCursor(DeviceIntPtr pDev, ScreenPtr pScreen, CursorPtr pCursor)
         ret = (*pScreen->DisplayCursor) (pDev, pScreen, pCursor);
     }
 
-    if (pCursor != CursorCurrent[pDev->id]) {
+    if (pCursor != pOldCursor) {
         CursorEventPtr e;
 
-        CursorCurrent[pDev->id] = pCursor;
+        UpdateCurrentTimeIf();
         for (e = cursorEvents; e; e = e->next) {
             if ((e->eventMask & XFixesDisplayCursorNotifyMask)) {
                 xXFixesCursorNotifyEvent ev = {
@@ -276,10 +294,11 @@ GetBit(unsigned char *line, int x)
     return 0;
 }
 
-int
+int _X_COLD
 SProcXFixesSelectCursorInput(ClientPtr client)
 {
     REQUEST(xXFixesSelectCursorInputReq);
+    REQUEST_SIZE_MATCH(xXFixesSelectCursorInputReq);
 
     swaps(&stuff->length);
     swapl(&stuff->window);
@@ -287,7 +306,7 @@ SProcXFixesSelectCursorInput(ClientPtr client)
     return (*ProcXFixesVector[stuff->xfixesReqType]) (client);
 }
 
-void
+void _X_COLD
 SXFixesCursorNotifyEvent(xXFixesCursorNotifyEvent * from,
                          xXFixesCursorNotifyEvent * to)
 {
@@ -306,11 +325,9 @@ CopyCursorToImage(CursorPtr pCursor, CARD32 *image)
     int height = pCursor->bits->height;
     int npixels = width * height;
 
-#ifdef ARGB_CURSOR
     if (pCursor->bits->argb)
         memcpy(image, pCursor->bits->argb, npixels * sizeof(CARD32));
     else
-#endif
     {
         unsigned char *srcLine = pCursor->bits->source;
         unsigned char *mskLine = pCursor->bits->mask;
@@ -351,7 +368,7 @@ ProcXFixesGetCursorImage(ClientPtr client)
     int npixels, width, height, rc, x, y;
 
     REQUEST_SIZE_MATCH(xXFixesGetCursorImageReq);
-    pCursor = CursorCurrent[PickPointer(client)->id];
+    pCursor = CursorForClient(client);
     if (!pCursor)
         return BadCursor;
     rc = XaceHook(XACE_RESOURCE_ACCESS, client, pCursor->id, RT_CURSOR,
@@ -398,7 +415,7 @@ ProcXFixesGetCursorImage(ClientPtr client)
     return Success;
 }
 
-int
+int _X_COLD
 SProcXFixesGetCursorImage(ClientPtr client)
 {
     REQUEST(xXFixesGetCursorImageReq);
@@ -415,7 +432,7 @@ ProcXFixesSetCursorName(ClientPtr client)
     REQUEST(xXFixesSetCursorNameReq);
     Atom atom;
 
-    REQUEST_AT_LEAST_SIZE(xXFixesSetCursorNameReq);
+    REQUEST_FIXED_SIZE(xXFixesSetCursorNameReq, stuff->nbytes);
     VERIFY_CURSOR(pCursor, stuff->cursor, client, DixSetAttrAccess);
     tchar = (char *) &stuff[1];
     atom = MakeAtom(tchar, stuff->nbytes, TRUE);
@@ -426,7 +443,7 @@ ProcXFixesSetCursorName(ClientPtr client)
     return Success;
 }
 
-int
+int _X_COLD
 SProcXFixesSetCursorName(ClientPtr client)
 {
     REQUEST(xXFixesSetCursorNameReq);
@@ -475,7 +492,7 @@ ProcXFixesGetCursorName(ClientPtr client)
     return Success;
 }
 
-int
+int _X_COLD
 SProcXFixesGetCursorName(ClientPtr client)
 {
     REQUEST(xXFixesGetCursorNameReq);
@@ -500,7 +517,7 @@ ProcXFixesGetCursorImageAndName(ClientPtr client)
     int rc, x, y;
 
     REQUEST_SIZE_MATCH(xXFixesGetCursorImageAndNameReq);
-    pCursor = CursorCurrent[PickPointer(client)->id];
+    pCursor = CursorForClient(client);
     if (!pCursor)
         return BadCursor;
     rc = XaceHook(XACE_RESOURCE_ACCESS, client, pCursor->id, RT_CURSOR,
@@ -555,7 +572,7 @@ ProcXFixesGetCursorImageAndName(ClientPtr client)
     return Success;
 }
 
-int
+int _X_COLD
 SProcXFixesGetCursorImageAndName(ClientPtr client)
 {
     REQUEST(xXFixesGetCursorImageAndNameReq);
@@ -580,8 +597,6 @@ typedef struct {
 static const RESTYPE CursorRestypes[] = {
     RT_WINDOW, RT_PASSIVEGRAB, RT_CURSOR
 };
-
-#define NUM_CURSOR_RESTYPES (sizeof (CursorRestypes) / sizeof (CursorRestypes[0]))
 
 static Bool
 ReplaceCursorLookup(void *value, XID id, void *closure)
@@ -645,7 +660,7 @@ ReplaceCursor(CursorPtr pCursor, TestCursorFunc testCursor, void *closure)
     for (clientIndex = 0; clientIndex < currentMaxClients; clientIndex++) {
         if (!clients[clientIndex])
             continue;
-        for (resIndex = 0; resIndex < NUM_CURSOR_RESTYPES; resIndex++) {
+        for (resIndex = 0; resIndex < ARRAY_SIZE(CursorRestypes); resIndex++) {
             rcl.type = CursorRestypes[resIndex];
             /*
              * This function walks the entire client resource database
@@ -655,7 +670,7 @@ ReplaceCursor(CursorPtr pCursor, TestCursorFunc testCursor, void *closure)
                                         ReplaceCursorLookup, (void *) &rcl);
         }
     }
-    /* this "knows" that WindowHasNewCursor doesn't depend on it's argument */
+    /* this "knows" that WindowHasNewCursor doesn't depend on its argument */
     WindowHasNewCursor(screenInfo.screens[0]->root);
 }
 
@@ -682,7 +697,7 @@ ProcXFixesChangeCursor(ClientPtr client)
     return Success;
 }
 
-int
+int _X_COLD
 SProcXFixesChangeCursor(ClientPtr client)
 {
     REQUEST(xXFixesChangeCursorReq);
@@ -721,7 +736,7 @@ ProcXFixesChangeCursorByName(ClientPtr client)
     return Success;
 }
 
-int
+int _X_COLD
 SProcXFixesChangeCursorByName(ClientPtr client)
 {
     REQUEST(xXFixesChangeCursorByNameReq);
@@ -776,10 +791,8 @@ createCursorHideCount(ClientPtr pClient, ScreenPtr pScreen)
      * Create a resource for this element so it can be deleted
      * when the client goes away.
      */
-    if (!AddResource(pChc->resource, CursorHideCountType, (void *) pChc)) {
-        free(pChc);
+    if (!AddResource(pChc->resource, CursorHideCountType, (void *) pChc))
         return BadAlloc;
-    }
 
     return Success;
 }
@@ -876,14 +889,14 @@ ProcXFixesHideCursor(ClientPtr client)
         for (dev = inputInfo.devices; dev; dev = dev->next) {
             if (IsMaster(dev) && IsPointerDevice(dev))
                 CursorDisplayCursor(dev, pWin->drawable.pScreen,
-                                    CursorCurrent[dev->id]);
+                                    CursorForDevice(dev));
         }
     }
 
     return ret;
 }
 
-int
+int _X_COLD
 SProcXFixesHideCursor(ClientPtr client)
 {
     REQUEST(xXFixesHideCursorReq);
@@ -934,7 +947,7 @@ ProcXFixesShowCursor(ClientPtr client)
     return Success;
 }
 
-int
+int _X_COLD
 SProcXFixesShowCursor(ClientPtr client)
 {
     REQUEST(xXFixesShowCursorReq);
@@ -971,7 +984,7 @@ CursorFreeHideCount(void *data, XID id)
     deleteCursorHideCount(pChc, pChc->pScreen);
     for (dev = inputInfo.devices; dev; dev = dev->next) {
         if (IsMaster(dev) && IsPointerDevice(dev))
-            CursorDisplayCursor(dev, pScreen, CursorCurrent[dev->id]);
+            CursorDisplayCursor(dev, pScreen, CursorForDevice(dev));
     }
 
     return 1;
@@ -1003,12 +1016,14 @@ ProcXFixesCreatePointerBarrier(ClientPtr client)
     return XICreatePointerBarrier(client, stuff);
 }
 
-int
+int _X_COLD
 SProcXFixesCreatePointerBarrier(ClientPtr client)
 {
     REQUEST(xXFixesCreatePointerBarrierReq);
     int i;
     CARD16 *in_devices = (CARD16 *) &stuff[1];
+
+    REQUEST_AT_LEAST_SIZE(xXFixesCreatePointerBarrierReq);
 
     swaps(&stuff->length);
     swaps(&stuff->num_devices);
@@ -1038,7 +1053,7 @@ ProcXFixesDestroyPointerBarrier(ClientPtr client)
     return XIDestroyPointerBarrier(client, stuff);
 }
 
-int
+int _X_COLD
 SProcXFixesDestroyPointerBarrier(ClientPtr client)
 {
     REQUEST(xXFixesDestroyPointerBarrierReq);

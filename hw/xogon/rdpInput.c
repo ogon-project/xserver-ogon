@@ -754,7 +754,7 @@ static void rdpEnqueueKey(int type, int scancode)
 	}
 #endif
 
-	nevents = GetKeyboardEvents(rdp_events, g_keyboard, type, scancode, NULL);
+	nevents = GetKeyboardEvents(rdp_events, g_keyboard, type, scancode);
 
 	for (i = 0; i < nevents; i++) {
 #if (XOGON_ENABLE_CUSTOM_AUTOREPEAT == 1)

@@ -24,8 +24,8 @@
  *      Adam Jackson <ajax@redhat.com>
  */
 
-#ifdef HAVE_CONFIG_H
-#include <kdrive-config.h>
+#ifdef HAVE_DIX_CONFIG_H
+#include <dix-config.h>
 #endif
 #include "ephyr.h"
 #include "ephyrlog.h"
@@ -100,7 +100,6 @@ ephyrRealizeCoreCursor(EphyrScrPriv *scr, CursorPtr cursor)
     xcb_free_pixmap(conn, mask);
 }
 
-#ifdef ARGB_CURSOR
 static xcb_render_pictformat_t
 get_argb_format(void)
 {
@@ -170,7 +169,6 @@ can_argb_cursor(void)
 
     return v->major_version == 0 && v->minor_version >= 5;
 }
-#endif
 
 static Bool
 ephyrRealizeCursor(DeviceIntPtr dev, ScreenPtr screen, CursorPtr cursor)
@@ -179,11 +177,9 @@ ephyrRealizeCursor(DeviceIntPtr dev, ScreenPtr screen, CursorPtr cursor)
     KdScreenInfo *kscr = pScreenPriv->screen;
     EphyrScrPriv *scr = kscr->driver;
 
-#ifdef ARGB_CURSOR
     if (cursor->bits->argb && can_argb_cursor())
         ephyrRealizeARGBCursor(scr, cursor);
     else
-#endif
     {
         ephyrRealizeCoreCursor(scr, cursor);
     }

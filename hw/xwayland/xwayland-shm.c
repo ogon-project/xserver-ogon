@@ -24,7 +24,9 @@
  * SOFTWARE.
  */
 
-#include "xwayland.h"
+#include <xwayland-config.h>
+
+#include "os.h"
 
 #include <sys/mman.h>
 #include <sys/types.h>
@@ -34,9 +36,15 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "fb.h"
+#include "pixmapstr.h"
+
+#include "xwayland-pixmap.h"
+#include "xwayland-screen.h"
+#include "xwayland-shm.h"
+
 struct xwl_pixmap {
     struct wl_buffer *buffer;
-    int fd;
     void *data;
     size_t size;
 };
@@ -82,7 +90,7 @@ create_tmpfile_cloexec(char *tmpname)
     }
 #endif
 
-    return fd;
+    return os_move_fd(fd);
 }
 
 /*
@@ -102,48 +110,83 @@ create_tmpfile_cloexec(char *tmpname)
  *
  * If the C library implements posix_fallocate(), it is used to
  * guarantee that disk space is available for the file at the
- * given size. If disk space is insufficent, errno is set to ENOSPC.
+ * given size. If disk space is insufficient, errno is set to ENOSPC.
  * If posix_fallocate() is not supported, program may receive
  * SIGBUS on accessing mmap()'ed file contents instead.
+ *
+ * If the C library implements memfd_create(), it is used to create the
+ * file purely in memory, without any backing file name on the file
+ * system, and then sealing off the possibility of shrinking it.  This
+ * can then be checked before accessing mmap()'ed file contents, to
+ * make sure SIGBUS can't happen.  It also avoids requiring
+ * XDG_RUNTIME_DIR.
  */
 static int
 os_create_anonymous_file(off_t size)
 {
-    static const char template[] = "/weston-shared-XXXXXX";
+    static const char template[] = "/xwayland-shared-XXXXXX";
     const char *path;
     char *name;
     int fd;
     int ret;
 
-    path = getenv("XDG_RUNTIME_DIR");
-    if (!path) {
-        errno = ENOENT;
-        return -1;
+#ifdef HAVE_MEMFD_CREATE
+    fd = memfd_create("xwayland-shared", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    if (fd >= 0) {
+        /* We can add this seal before calling posix_fallocate(), as
+         * the file is currently zero-sized anyway.
+         *
+         * There is also no need to check for the return value, we
+         * couldn't do anything with it anyway.
+         */
+        fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK);
+    } else
+#endif
+    {
+        path = getenv("XDG_RUNTIME_DIR");
+        if (!path) {
+            errno = ENOENT;
+            return -1;
+        }
+
+        name = malloc(strlen(path) + sizeof(template));
+        if (!name)
+            return -1;
+
+        strcpy(name, path);
+        strcat(name, template);
+
+        fd = create_tmpfile_cloexec(name);
+
+        free(name);
+
+        if (fd < 0)
+            return -1;
     }
 
-    name = malloc(strlen(path) + sizeof(template));
-    if (!name)
-        return -1;
-
-    strcpy(name, path);
-    strcat(name, template);
-
-    fd = create_tmpfile_cloexec(name);
-
-    free(name);
-
-    if (fd < 0)
-        return -1;
-
 #ifdef HAVE_POSIX_FALLOCATE
-    ret = posix_fallocate(fd, 0, size);
+    /*
+     * posix_fallocate does an explicit rollback if it gets EINTR.
+     * Temporarily block signals to allow the call to succeed on
+     * slow systems where the smart scheduler's SIGALRM prevents
+     * large allocation attempts from ever succeeding.
+     */
+    OsBlockSignals();
+    do {
+        ret = posix_fallocate(fd, 0, size);
+    } while (ret == EINTR);
+    OsReleaseSignals();
+
     if (ret != 0) {
         close(fd);
         errno = ret;
         return -1;
     }
 #else
-    ret = ftruncate(fd, size);
+    do {
+        ret = ftruncate(fd, size);
+    } while (ret == -1 && errno == EINTR);
+
     if (ret < 0) {
         close(fd);
         return -1;
@@ -170,15 +213,24 @@ shm_format_for_depth(int depth)
     }
 }
 
+static const struct wl_buffer_listener xwl_shm_buffer_listener = {
+    xwl_pixmap_buffer_release_cb,
+};
+
 PixmapPtr
 xwl_shm_create_pixmap(ScreenPtr screen,
                       int width, int height, int depth, unsigned int hint)
 {
-    PixmapPtr pixmap;
+    struct xwl_screen *xwl_screen = xwl_screen_get(screen);
     struct xwl_pixmap *xwl_pixmap;
+    struct wl_shm_pool *pool;
+    PixmapPtr pixmap;
     size_t size, stride;
+    uint32_t format;
+    int fd;
 
     if (hint == CREATE_PIXMAP_USAGE_GLYPH_PICTURE ||
+        (!xwl_screen->rootless && hint != CREATE_PIXMAP_USAGE_BACKING_PIXMAP) ||
         (width == 0 && height == 0) || depth < 15)
         return fbCreatePixmap(screen, width, height, depth, hint);
 
@@ -186,7 +238,7 @@ xwl_shm_create_pixmap(ScreenPtr screen,
     if (!pixmap)
         return NULL;
 
-    xwl_pixmap = malloc(sizeof *xwl_pixmap);
+    xwl_pixmap = calloc(1, sizeof(*xwl_pixmap));
     if (xwl_pixmap == NULL)
         goto err_destroy_pixmap;
 
@@ -194,12 +246,12 @@ xwl_shm_create_pixmap(ScreenPtr screen,
     size = stride * height;
     xwl_pixmap->buffer = NULL;
     xwl_pixmap->size = size;
-    xwl_pixmap->fd = os_create_anonymous_file(size);
-    if (xwl_pixmap->fd < 0)
+    fd = os_create_anonymous_file(size);
+    if (fd < 0)
         goto err_free_xwl_pixmap;
 
     xwl_pixmap->data = mmap(NULL, size, PROT_READ | PROT_WRITE,
-                                  MAP_SHARED, xwl_pixmap->fd, 0);
+                                  MAP_SHARED, fd, 0);
     if (xwl_pixmap->data == MAP_FAILED)
         goto err_close_fd;
 
@@ -208,6 +260,18 @@ xwl_shm_create_pixmap(ScreenPtr screen,
                                         stride, xwl_pixmap->data))
         goto err_munmap;
 
+    format = shm_format_for_depth(pixmap->drawable.depth);
+    pool = wl_shm_create_pool(xwl_screen->shm, fd, xwl_pixmap->size);
+    xwl_pixmap->buffer = wl_shm_pool_create_buffer(pool, 0,
+                                                   pixmap->drawable.width,
+                                                   pixmap->drawable.height,
+                                                   pixmap->devKind, format);
+    wl_shm_pool_destroy(pool);
+    close(fd);
+
+    wl_buffer_add_listener(xwl_pixmap->buffer,
+                           &xwl_shm_buffer_listener, pixmap);
+
     xwl_pixmap_set_private(pixmap, xwl_pixmap);
 
     return pixmap;
@@ -215,7 +279,7 @@ xwl_shm_create_pixmap(ScreenPtr screen,
  err_munmap:
     munmap(xwl_pixmap->data, size);
  err_close_fd:
-    close(xwl_pixmap->fd);
+    close(fd);
  err_free_xwl_pixmap:
     free(xwl_pixmap);
  err_destroy_pixmap:
@@ -230,10 +294,10 @@ xwl_shm_destroy_pixmap(PixmapPtr pixmap)
     struct xwl_pixmap *xwl_pixmap = xwl_pixmap_get(pixmap);
 
     if (xwl_pixmap && pixmap->refcnt == 1) {
+        xwl_pixmap_del_buffer_release_cb(pixmap);
         if (xwl_pixmap->buffer)
             wl_buffer_destroy(xwl_pixmap->buffer);
         munmap(xwl_pixmap->data, xwl_pixmap->size);
-        close(xwl_pixmap->fd);
         free(xwl_pixmap);
     }
 
@@ -243,26 +307,7 @@ xwl_shm_destroy_pixmap(PixmapPtr pixmap)
 struct wl_buffer *
 xwl_shm_pixmap_get_wl_buffer(PixmapPtr pixmap)
 {
-    struct xwl_screen *xwl_screen = xwl_screen_get(pixmap->drawable.pScreen);
-    struct xwl_pixmap *xwl_pixmap = xwl_pixmap_get(pixmap);
-    struct wl_shm_pool *pool;
-    uint32_t format;
-
-    if (xwl_pixmap->buffer)
-        return xwl_pixmap->buffer;
-
-    pool = wl_shm_create_pool(xwl_screen->shm,
-                              xwl_pixmap->fd, xwl_pixmap->size);
-
-    format = shm_format_for_depth(pixmap->drawable.depth);
-    xwl_pixmap->buffer = wl_shm_pool_create_buffer(pool, 0,
-                                                   pixmap->drawable.width,
-                                                   pixmap->drawable.height,
-                                                   pixmap->devKind, format);
-
-    wl_shm_pool_destroy(pool);
-
-    return xwl_pixmap->buffer;
+    return xwl_pixmap_get(pixmap)->buffer;
 }
 
 Bool
@@ -287,6 +332,8 @@ xwl_shm_create_screen_resources(ScreenPtr screen)
             xwl_shm_create_pixmap(screen, screen->width, screen->height,
                                   screen->rootDepth,
                                   CREATE_PIXMAP_USAGE_BACKING_PIXMAP);
+
+    SetRootClip(screen, xwl_screen->root_clip_mode);
 
     return screen->devPrivate != NULL;
 }

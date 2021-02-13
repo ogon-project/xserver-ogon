@@ -103,7 +103,6 @@ typedef enum {
     XKBDIR,
 
     /* Server Flag tokens.  These are deprecated in favour of generic Options */
-    NOTRAPSIGNALS,
     DONTZAP,
     DONTZOOM,
     DISABLEVIDMODE,
@@ -143,6 +142,7 @@ typedef enum {
     /* Screen tokens */
     OBSDRIVER,
     MDEVICE,
+    GDEVICE,
     MONITOR,
     SCREENNO,
     DEFAULTDEPTH,
@@ -284,8 +284,19 @@ typedef enum {
     MATCH_IS_POINTER,
     MATCH_IS_JOYSTICK,
     MATCH_IS_TABLET,
+    MATCH_IS_TABLET_PAD,
     MATCH_IS_TOUCHPAD,
-    MATCH_IS_TOUCHSCREEN
+    MATCH_IS_TOUCHSCREEN,
+
+    NOMATCH_PRODUCT,
+    NOMATCH_VENDOR,
+    NOMATCH_DEVICE_PATH,
+    NOMATCH_OS,
+    NOMATCH_PNPID,
+    NOMATCH_USBID,
+    NOMATCH_DRIVER,
+    NOMATCH_TAG,
+    NOMATCH_LAYOUT,
 } ParserTokens;
 
 #endif                          /* _xf86_tokens_h */

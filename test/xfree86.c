@@ -30,6 +30,8 @@
 #include "xf86.h"
 #include "xf86Parser.h"
 
+#include "tests-common.h"
+
 static void
 xfree86_option_list_duplicate(void)
 {
@@ -67,7 +69,8 @@ xfree86_option_list_duplicate(void)
 
     a = xf86FindOption(options, o_null);
     b = xf86FindOption(duplicate, o_null);
-    assert(a && b);
+    assert(a);
+    assert(b);
 }
 
 static void
@@ -96,7 +99,7 @@ xfree86_add_comment(void)
 }
 
 int
-main(int argc, char **argv)
+xfree86_test(void)
 {
     xfree86_option_list_duplicate();
     xfree86_add_comment();

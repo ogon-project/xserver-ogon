@@ -438,7 +438,7 @@ dmxGetColormaps(DMXScreenInfo * dmxScreen)
     int i;
 
     dmxScreen->beNumDefColormaps = dmxScreen->beNumVisuals;
-    dmxScreen->beDefColormaps = malloc(dmxScreen->beNumDefColormaps *
+    dmxScreen->beDefColormaps = xallocarray(dmxScreen->beNumDefColormaps,
                                        sizeof(*dmxScreen->beDefColormaps));
 
     for (i = 0; i < dmxScreen->beNumDefColormaps; i++)
@@ -532,70 +532,10 @@ dmxDisplayInit(DMXScreenInfo * dmxScreen)
     dmxGetPixmapFormats(dmxScreen);
 }
 
-/* If this doesn't compile, just add || defined(yoursystem) to the line
- * below.  This information is to help with bug reports and is not
- * critical. */
-#if !defined(_POSIX_SOURCE)
-static const char *
-dmxExecOS(void)
-{
-    return "";
-}
-#else
-#include <sys/utsname.h>
-static const char *
-dmxExecOS(void)
-{
-    static char buffer[128];
-    static int initialized = 0;
-    struct utsname u;
-
-    if (!initialized++) {
-        memset(buffer, 0, sizeof(buffer));
-        uname(&u);
-        snprintf(buffer, sizeof(buffer) - 1, "%s %s %s",
-                 u.sysname, u.release, u.version);
-    }
-    return buffer;
-}
-#endif
-
-static const char *
-dmxBuildCompiler(void)
-{
-    static char buffer[128];
-    static int initialized = 0;
-
-    if (!initialized++) {
-        memset(buffer, 0, sizeof(buffer));
-#if defined(__GNUC__) && defined(__GNUC_MINOR__) &&defined(__GNUC_PATCHLEVEL__)
-        snprintf(buffer, sizeof(buffer) - 1, "gcc %d.%d.%d",
-                 __GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__);
-#endif
-    }
-    return buffer;
-}
-
-static const char *
-dmxExecHost(void)
-{
-    static char buffer[128];
-    static int initialized = 0;
-
-    if (!initialized++) {
-        memset(buffer, 0, sizeof(buffer));
-        XmuGetHostname(buffer, sizeof(buffer) - 1);
-    }
-    return buffer;
-}
-
-static void dmxAddExtensions(Bool glxSupported)
+static void dmxAddExtensions(void)
 {
     const ExtensionModule dmxExtensions[] = {
         { DMXExtensionInit, DMX_EXTENSION_NAME, NULL },
-#ifdef GLXEXT
-        { GlxExtensionInit, "GLX", &glxSupported },
-#endif
     };
 
     LoadExtensionList(dmxExtensions, ARRAY_SIZE(dmxExtensions), TRUE);
@@ -607,12 +547,6 @@ InitOutput(ScreenInfo * pScreenInfo, int argc, char *argv[])
 {
     int i;
     static unsigned long dmxGeneration = 0;
-
-#ifdef GLXEXT
-    static Bool glxSupported = TRUE;
-#else
-    const Bool glxSupported = FALSE;
-#endif
 
     if (dmxGeneration != serverGeneration) {
         int vendrel = VENDOR_RELEASE;
@@ -635,18 +569,11 @@ InitOutput(ScreenInfo * pScreenInfo, int argc, char *argv[])
             year += 2000;
 
         dmxLog(dmxInfo, "Generation:         %lu\n", dmxGeneration);
-        dmxLog(dmxInfo, "DMX version:        %d.%d.%02d%02d%02d (%s)\n",
-               major, minor, year, month, day, VENDOR_STRING);
+        dmxLog(dmxInfo, "DMX version:        %d.%d.%02d%02d%02d\n",
+               major, minor, year, month, day);
 
         SetVendorRelease(VENDOR_RELEASE);
-        SetVendorString(VENDOR_STRING);
 
-        if (dmxGeneration == 1) {
-            dmxLog(dmxInfo, "DMX Build OS:       %s (%s)\n", OSNAME, OSVENDOR);
-            dmxLog(dmxInfo, "DMX Build Compiler: %s\n", dmxBuildCompiler());
-            dmxLog(dmxInfo, "DMX Execution OS:   %s\n", dmxExecOS());
-            dmxLog(dmxInfo, "DMX Execution Host: %s\n", dmxExecHost());
-        }
         dmxLog(dmxInfo, "MAXSCREENS:         %d\n", MAXSCREENS);
 
         for (i = 0; i < dmxNumScreens; i++) {
@@ -709,7 +636,7 @@ InitOutput(ScreenInfo * pScreenInfo, int argc, char *argv[])
     for (i = 0; i < dmxNumScreens; i++)
         dmxDisplayInit(&dmxScreens[i]);
 
-#if PANORAMIX
+#ifdef PANORAMIX
     /* Register a Xinerama callback which will run from within
      * PanoramiXCreateConnectionBlock.  We can use the callback to
      * determine if Xinerama is loaded and to check the visuals
@@ -739,17 +666,17 @@ InitOutput(ScreenInfo * pScreenInfo, int argc, char *argv[])
 #ifdef GLXEXT
     /* Check if GLX extension exists on all back-end servers */
     for (i = 0; i < dmxNumScreens; i++)
-        glxSupported &= (dmxScreens[i].glxMajorOpcode > 0);
+        noGlxExtension |= (dmxScreens[i].glxMajorOpcode == 0);
 #endif
 
     if (serverGeneration == 1)
-        dmxAddExtensions(glxSupported);
+        dmxAddExtensions();
 
     /* Tell dix layer about the backend displays */
     for (i = 0; i < dmxNumScreens; i++) {
 
 #ifdef GLXEXT
-        if (glxSupported) {
+        if (!noGlxExtension) {
             /*
              * Builds GLX configurations from the list of visuals
              * supported by the back-end server, and give that
@@ -793,7 +720,7 @@ InitOutput(ScreenInfo * pScreenInfo, int argc, char *argv[])
                 nconfigs = dmxScreen->numGlxVisuals;
             }
 
-            configprivs = malloc(nconfigs * sizeof(dmxGlxVisualPrivate *));
+            configprivs = xallocarray(nconfigs, sizeof(dmxGlxVisualPrivate *));
 
             if (configs != NULL && configprivs != NULL) {
                 int j;
@@ -877,11 +804,12 @@ dmxSetDefaultFontPath(const char *fp)
     defaultFontPath = dmxFontPath;
 }
 
-/** This function is called in Xserver/os/utils.c from \a AbortServer().
- * We must ensure that backend and console state is restored in the
- * event the server shutdown wasn't clean. */
+/** This function is called in Xserver/dix/main.c from \a main() when
+ * dispatchException & DE_TERMINATE (which is the only way to exit the
+ * main loop without an interruption), and from AbortServer on
+ * abnormal exit. */
 void
-AbortDDX(enum ExitCode error)
+ddxGiveUp(enum ExitCode error)
 {
     int i;
 
@@ -901,14 +829,14 @@ ddxBeforeReset(void)
 }
 #endif
 
-/** This function is called in Xserver/dix/main.c from \a main() when
- * dispatchException & DE_TERMINATE (which is the only way to exit the
- * main loop without an interruption. */
+#if INPUTTHREAD
+/** This function is called in Xserver/os/inputthread.c when starting
+    the input thread. */
 void
-ddxGiveUp(enum ExitCode error)
+ddxInputThreadInit(void)
 {
-    AbortDDX(error);
 }
+#endif
 
 /** This function is called in Xserver/os/osinit.c from \a OsInit(). */
 void

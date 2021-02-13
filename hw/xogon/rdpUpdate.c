@@ -743,7 +743,7 @@ static BOOL rds_client_message(ogon_backend_service* backend, ogon_msg_message* 
 		save = malloc(sizeof(int));
 		*save = fd[0];
 		ArrayList_Add(g_Messages,save);
-		AddEnabledDevice(fd[0]);
+		SetNotifyFd(fd[0], check_message_fds, X_NOTIFY_READ, NULL);
 	}
 
 	return TRUE;
@@ -760,14 +760,13 @@ static int rds_service_accept(ogon_backend_service* service)
 		return 1;
 	}
 
-	RemoveEnabledDevice(g_serverfd);
+	RemoveNotifyFd(g_serverfd);
 
 	g_clientfd = ogon_service_client_fd(service);
 	g_connected = 1;
 	rdp_send_version();
 
-
-	AddEnabledDevice(g_clientfd);
+	SetNotifyFd(g_clientfd, client_incoming, X_NOTIFY_READ, NULL);
 
 	fprintf(stderr, "RdsServiceAccept()\n");
 
@@ -779,9 +778,9 @@ int rds_service_disconnect(ogon_backend_service* service)
 {
 	KbdSessionDisconnect();
 
-	RemoveEnabledDevice(g_clientfd);
+	RemoveNotifyFd(g_clientfd);
 	if (g_multitouchFd >= 0) {
-		RemoveEnabledDevice(g_multitouchFd);
+		RemoveNotifyFd(g_multitouchFd);
 		g_multitouchFd = -1;
 		multitouchClose();
 	}
@@ -796,7 +795,7 @@ int rds_service_disconnect(ogon_backend_service* service)
 
 	rdp_detach_rds_framebuffer();
 
-	AddEnabledDevice(g_serverfd);
+	SetNotifyFd(g_serverfd, server_incoming, X_NOTIFY_READ, NULL);
 
 	return 0;
 }
@@ -856,7 +855,7 @@ int rdp_init(void)
 		ogon_service_set_callbacks(g_service, &g_callbacks);
 
 		g_serverfd = ogon_service_server_fd(g_service);
-		AddEnabledDevice( g_serverfd );
+		SetNotifyFd(g_serverfd, server_incoming, X_NOTIFY_READ, NULL);
 	}
 
 	return 1;
@@ -878,7 +877,7 @@ static int read_pipe_rds_client_message(int fd, BYTE* buffer, int size)
 	return 1;
 }
 
-static void check_message_fds(fd_set *fdset)
+void check_message_fds(int fd, int ready, void* data)
 {
 	int index = 0;
 	int messagefd;
@@ -887,13 +886,15 @@ static void check_message_fds(fd_set *fdset)
 	UINT32 message_id;
 	ogon_msg_message_reply rep;
 
+	if (!ready)
+		return;
+
 	save = ArrayList_GetItem(g_Messages, index++);
 	while (save)
 	{
 		messagefd = *save;
-		if (FD_ISSET(messagefd, fdset)) {
-
-			RemoveEnabledDevice(messagefd);
+		if (messagefd == fd) {
+			RemoveNotifyFd(messagefd);
 			ArrayList_Remove(g_Messages,save);
 			free(save);
 			if (!g_connected) {
@@ -920,13 +921,52 @@ static void check_message_fds(fd_set *fdset)
 	return;
 }
 
+void client_incoming(int fd, int ready, void *data)
+{
+	ogon_backend_service* service = g_service;
+	ogon_incoming_bytes_result res;
+
+	res = ogon_service_incoming_bytes(service, service);
+
+	switch (res)
+	{
+	case OGON_INCOMING_BYTES_WANT_MORE_DATA:
+	case OGON_INCOMING_BYTES_OK:
+		return;
+
+	case OGON_INCOMING_BYTES_BROKEN_PIPE:
+	case OGON_INCOMING_BYTES_INVALID_MESSAGE:
+	default:
+		rds_service_disconnect(service);
+		break;
+	}
+}
+
+void multitouch_incoming(int fd, int ready, void *data)
+{
+	if (multitouchHandle() < 0) {
+		RemoveNotifyFd(g_multitouchFd);
+		g_multitouchFd = -1;
+		multitouchClose();
+	}
+}
+
+void server_incoming(int fd, int ready, void *data)
+{
+	if (rds_service_accept(g_service) == 0) {
+		g_multitouchFd = multitouchTryToStart();
+		if (g_multitouchFd >= 0)
+			SetNotifyFd(g_multitouchFd, multitouch_incoming, X_NOTIFY_READ, NULL);
+	}
+}
+
 void rdp_check(void *blockData, int result, void *bitset)
 {
 	ogon_backend_service* service = g_service;
 	ogon_incoming_bytes_result res;
 	fd_set *fdset = (fd_set *)bitset;
 
-	check_message_fds(fdset);
+	// check_message_fds(fdset);
 
 	if (g_connected)
 	{
@@ -949,7 +989,7 @@ void rdp_check(void *blockData, int result, void *bitset)
 
 		if (g_multitouchFd >= 0 && FD_ISSET(g_multitouchFd, fdset)) {
 			if (multitouchHandle() < 0) {
-				RemoveEnabledDevice(g_multitouchFd);
+				RemoveNotifyFd(g_multitouchFd);
 				g_multitouchFd = -1;
 				multitouchClose();
 			}
@@ -963,7 +1003,7 @@ void rdp_check(void *blockData, int result, void *bitset)
 		if (rds_service_accept(service) == 0) {
 			g_multitouchFd = multitouchTryToStart();
 			if (g_multitouchFd >= 0)
-				AddEnabledDevice(g_multitouchFd);
+				SetNotifyFd(g_multitouchFd, multitouch_incoming, X_NOTIFY_READ, NULL);
 		}
 	}
 }

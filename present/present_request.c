@@ -20,10 +20,6 @@
  * OF THIS SOFTWARE.
  */
 
-#ifdef HAVE_XORG_CONFIG_H
-#include <xorg-config.h>
-#endif
-
 #include "present_priv.h"
 #include "randrstr.h"
 #include <protocol-versions.h>
@@ -41,7 +37,19 @@ proc_present_query_version(ClientPtr client)
     };
 
     REQUEST_SIZE_MATCH(xPresentQueryVersionReq);
-    (void) stuff;
+    /* From presentproto:
+     *
+     * The client sends the highest supported version to the server
+     * and the server sends the highest version it supports, but no
+     * higher than the requested version.
+     */
+
+    if (rep.majorVersion > stuff->majorVersion ||
+        rep.minorVersion > stuff->minorVersion) {
+        rep.majorVersion = stuff->majorVersion;
+        rep.minorVersion = stuff->minorVersion;
+    }
+
     if (client->swapped) {
         swaps(&rep.sequenceNumber);
         swapl(&rep.length);
@@ -184,8 +192,6 @@ proc_present_select_input (ClientPtr client)
 
     REQUEST_SIZE_MATCH(xPresentSelectInputReq);
 
-    LEGAL_NEW_RESOURCE(stuff->eid, client);
-
     rc = dixLookupWindow(&window, stuff->window, client, DixGetAttrAccess);
     if (rc != Success)
         return rc;
@@ -234,7 +240,7 @@ proc_present_query_capabilities (ClientPtr client)
     return Success;
 }
 
-int (*proc_present_vector[PresentNumberRequests]) (ClientPtr) = {
+static int (*proc_present_vector[PresentNumberRequests]) (ClientPtr) = {
     proc_present_query_version,            /* 0 */
     proc_present_pixmap,                   /* 1 */
     proc_present_notify_msc,               /* 2 */
@@ -251,7 +257,7 @@ proc_present_dispatch(ClientPtr client)
     return (*proc_present_vector[stuff->data]) (client);
 }
 
-static int
+static int _X_COLD
 sproc_present_query_version(ClientPtr client)
 {
     REQUEST(xPresentQueryVersionReq);
@@ -263,7 +269,7 @@ sproc_present_query_version(ClientPtr client)
     return (*proc_present_vector[stuff->presentReqType]) (client);
 }
 
-static int
+static int _X_COLD
 sproc_present_pixmap(ClientPtr client)
 {
     REQUEST(xPresentPixmapReq);
@@ -283,7 +289,7 @@ sproc_present_pixmap(ClientPtr client)
     return (*proc_present_vector[stuff->presentReqType]) (client);
 }
 
-static int
+static int _X_COLD
 sproc_present_notify_msc(ClientPtr client)
 {
     REQUEST(xPresentNotifyMSCReq);
@@ -297,7 +303,7 @@ sproc_present_notify_msc(ClientPtr client)
     return (*proc_present_vector[stuff->presentReqType]) (client);
 }
 
-static int
+static int _X_COLD
 sproc_present_select_input (ClientPtr client)
 {
     REQUEST(xPresentSelectInputReq);
@@ -309,7 +315,7 @@ sproc_present_select_input (ClientPtr client)
     return (*proc_present_vector[stuff->presentReqType]) (client);
 }
 
-static int
+static int _X_COLD
 sproc_present_query_capabilities (ClientPtr client)
 {
     REQUEST(xPresentQueryCapabilitiesReq);
@@ -319,7 +325,7 @@ sproc_present_query_capabilities (ClientPtr client)
     return (*proc_present_vector[stuff->presentReqType]) (client);
 }
 
-int (*sproc_present_vector[PresentNumberRequests]) (ClientPtr) = {
+static int (*sproc_present_vector[PresentNumberRequests]) (ClientPtr) = {
     sproc_present_query_version,           /* 0 */
     sproc_present_pixmap,                  /* 1 */
     sproc_present_notify_msc,              /* 2 */
@@ -327,7 +333,7 @@ int (*sproc_present_vector[PresentNumberRequests]) (ClientPtr) = {
     sproc_present_query_capabilities,      /* 4 */
 };
 
-int
+int _X_COLD
 sproc_present_dispatch(ClientPtr client)
 {
     REQUEST(xReq);

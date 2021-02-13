@@ -42,12 +42,9 @@
 
 #define TOUCH_HISTORY_SIZE 100
 
-/* If a touch queue resize is needed, the device id's bit is set. */
-static unsigned char resize_waiting[(MAXDEVICES + 7) / 8];
-
 /**
  * Some documentation about touch points:
- * The driver submits touch events with it's own (unique) touch point ID.
+ * The driver submits touch events with its own (unique) touch point ID.
  * The driver may re-use those IDs, the DDX doesn't care. It just passes on
  * the data to the DIX. In the server, the driver's ID is referred to as the
  * DDX id anyway.
@@ -66,7 +63,7 @@ static unsigned char resize_waiting[(MAXDEVICES + 7) / 8];
 
 /**
  * Check which devices need a bigger touch event queue and grow their
- * last.touches by half it's current size.
+ * last.touches by half its current size.
  *
  * @param client Always the serverClient
  * @param closure Always NULL
@@ -74,47 +71,27 @@ static unsigned char resize_waiting[(MAXDEVICES + 7) / 8];
  * @return Always True. If we fail to grow we probably will topple over soon
  * anyway and re-executing this won't help.
  */
+
 static Bool
-TouchResizeQueue(ClientPtr client, void *closure)
+TouchResizeQueue(DeviceIntPtr dev)
 {
-    int i;
+    DDXTouchPointInfoPtr tmp;
+    size_t size;
 
-    OsBlockSignals();
+    /* Grow sufficiently so we don't need to do it often */
+    size = dev->last.num_touches + dev->last.num_touches / 2 + 1;
 
-    /* first two ids are reserved */
-    for (i = 2; i < MAXDEVICES; i++) {
-        DeviceIntPtr dev;
-        DDXTouchPointInfoPtr tmp;
-        size_t size;
+    tmp = reallocarray(dev->last.touches, size, sizeof(*dev->last.touches));
+    if (tmp) {
+        int j;
 
-        if (!BitIsOn(resize_waiting, i))
-            continue;
-
-        ClearBit(resize_waiting, i);
-
-        /* device may have disappeared by now */
-        dixLookupDevice(&dev, i, serverClient, DixWriteAccess);
-        if (!dev)
-            continue;
-
-        /* Need to grow the queue means dropping events. Grow sufficiently so we
-         * don't need to do it often */
-        size = dev->last.num_touches + dev->last.num_touches / 2 + 1;
-
-        tmp = realloc(dev->last.touches, size * sizeof(*dev->last.touches));
-        if (tmp) {
-            int j;
-
-            dev->last.touches = tmp;
-            for (j = dev->last.num_touches; j < size; j++)
-                TouchInitDDXTouchPoint(dev, &dev->last.touches[j]);
-            dev->last.num_touches = size;
-        }
-
+        dev->last.touches = tmp;
+        for (j = dev->last.num_touches; j < size; j++)
+            TouchInitDDXTouchPoint(dev, &dev->last.touches[j]);
+        dev->last.num_touches = size;
+        return TRUE;
     }
-    OsReleaseSignals();
-
-    return TRUE;
+    return FALSE;
 }
 
 /**
@@ -172,14 +149,20 @@ TouchBeginDDXTouch(DeviceIntPtr dev, uint32_t ddx_id)
     if (TouchFindByDDXID(dev, ddx_id, FALSE))
         return NULL;
 
-    for (i = 0; i < dev->last.num_touches; i++) {
-        /* Only emulate pointer events on the first touch */
-        if (dev->last.touches[i].active)
-            emulate_pointer = FALSE;
-        else if (!ti)           /* ti is now first non-active touch rec */
-            ti = &dev->last.touches[i];
+    for (;;) {
+        for (i = 0; i < dev->last.num_touches; i++) {
+            /* Only emulate pointer events on the first touch */
+            if (dev->last.touches[i].active)
+                emulate_pointer = FALSE;
+            else if (!ti)           /* ti is now first non-active touch rec */
+                ti = &dev->last.touches[i];
 
-        if (!emulate_pointer && ti)
+            if (!emulate_pointer && ti)
+                break;
+        }
+        if (ti)
+            break;
+        if (!TouchResizeQueue(dev))
             break;
     }
 
@@ -194,21 +177,8 @@ TouchBeginDDXTouch(DeviceIntPtr dev, uint32_t ddx_id)
             next_client_id = 1;
         ti->client_id = client_id;
         ti->emulate_pointer = emulate_pointer;
-        return ti;
     }
-
-    /* If we get here, then we've run out of touches and we need to drop the
-     * event (we're inside the SIGIO handler here) schedule a WorkProc to
-     * grow the queue for us for next time. */
-    ErrorFSigSafe("%s: not enough space for touch events (max %u touchpoints). "
-                  "Dropping this event.\n", dev->name, dev->last.num_touches);
-
-    if (!BitIsOn(resize_waiting, dev->id)) {
-        SetBit(resize_waiting, dev->id);
-        QueueWorkProc(TouchResizeQueue, serverClient, NULL);
-    }
-
-    return NULL;
+    return ti;
 }
 
 void
@@ -350,7 +320,7 @@ TouchBeginTouch(DeviceIntPtr dev, int sourceid, uint32_t touchid,
 
     /* If we get here, then we've run out of touches: enlarge dev->touch and
      * try again. */
-    tmp = realloc(t->touches, (t->num_touches + 1) * sizeof(*ti));
+    tmp = reallocarray(t->touches, t->num_touches + 1, sizeof(*ti));
     if (tmp) {
         t->touches = tmp;
         t->num_touches++;
@@ -464,7 +434,7 @@ TouchEventHistoryPush(TouchPointInfoPtr ti, const DeviceEvent *ev)
     /* FIXME: proper overflow fixes */
     if (ti->history_elements > ti->history_size - 1) {
         ti->history_elements = ti->history_size - 1;
-        DebugF("source device %d: history size %d overflowing for touch %u\n",
+        DebugF("source device %d: history size %zu overflowing for touch %u\n",
                ti->sourceid, ti->history_size, ti->client_id);
     }
 }
@@ -477,7 +447,7 @@ TouchEventHistoryReplay(TouchPointInfoPtr ti, DeviceIntPtr dev, XID resource)
     if (!ti->history)
         return;
 
-    TouchDeliverDeviceClassesChangedEvent(ti, ti->history[0].time, resource);
+    DeliverDeviceClassesChangedEvent(ti->sourceid, ti->history[0].time);
 
     for (i = 0; i < ti->history_elements; i++) {
         DeviceEvent *ev = &ti->history[i];
@@ -501,36 +471,11 @@ TouchEventHistoryReplay(TouchPointInfoPtr ti, DeviceIntPtr dev, XID resource)
     }
 }
 
-void
-TouchDeliverDeviceClassesChangedEvent(TouchPointInfoPtr ti, Time time,
-                                      XID resource)
-{
-    DeviceIntPtr dev;
-    int num_events = 0;
-    InternalEvent dcce;
-
-    dixLookupDevice(&dev, ti->sourceid, serverClient, DixWriteAccess);
-
-    if (!dev)
-        return;
-
-    /* UpdateFromMaster generates at most one event */
-    UpdateFromMaster(&dcce, dev, DEVCHANGE_POINTER_EVENT, &num_events);
-    BUG_WARN(num_events > 1);
-
-    if (num_events) {
-        dcce.any.time = time;
-        /* FIXME: This doesn't do anything */
-        dev->public.processInputProc(&dcce, dev);
-    }
-}
-
 Bool
 TouchBuildDependentSpriteTrace(DeviceIntPtr dev, SpritePtr sprite)
 {
     int i;
     TouchClassPtr t = dev->touch;
-    WindowPtr *trace;
     SpritePtr srcsprite;
 
     /* All touches should have the same sprite trace, so find and reuse an
@@ -546,21 +491,7 @@ TouchBuildDependentSpriteTrace(DeviceIntPtr dev, SpritePtr sprite)
     else
         return FALSE;
 
-    if (srcsprite->spriteTraceGood > sprite->spriteTraceSize) {
-        trace = realloc(sprite->spriteTrace,
-                        srcsprite->spriteTraceSize * sizeof(*trace));
-        if (!trace) {
-            sprite->spriteTraceGood = 0;
-            return FALSE;
-        }
-        sprite->spriteTrace = trace;
-        sprite->spriteTraceSize = srcsprite->spriteTraceGood;
-    }
-    memcpy(sprite->spriteTrace, srcsprite->spriteTrace,
-           srcsprite->spriteTraceGood * sizeof(*trace));
-    sprite->spriteTraceGood = srcsprite->spriteTraceGood;
-
-    return TRUE;
+    return CopySprite(srcsprite, sprite);
 }
 
 /**
@@ -608,7 +539,7 @@ TouchBuildSprite(DeviceIntPtr sourcedev, TouchPointInfoPtr ti,
  * @param[in] button_event The respective button event (if any)
  *
  * @returns The number of converted events.
- * @retval 0 An error occured
+ * @retval 0 An error occurred
  * @retval 1 only the motion event is valid
  * @retval 2 motion and button event are valid
  */
@@ -751,7 +682,7 @@ TouchRemoveListener(TouchPointInfoPtr ti, XID resource)
             ti->listeners[j] = ti->listeners[j + 1];
         ti->num_listeners--;
         ti->listeners[ti->num_listeners].listener = 0;
-        ti->listeners[ti->num_listeners].state = LISTENER_AWAITING_BEGIN;
+        ti->listeners[ti->num_listeners].state = TOUCH_LISTENER_AWAITING_BEGIN;
 
         return TRUE;
     }
@@ -762,7 +693,7 @@ static void
 TouchAddGrabListener(DeviceIntPtr dev, TouchPointInfoPtr ti,
                      InternalEvent *ev, GrabPtr grab)
 {
-    enum TouchListenerType type = LISTENER_GRAB;
+    enum TouchListenerType type = TOUCH_LISTENER_GRAB;
 
     /* FIXME: owner_events */
 
@@ -770,16 +701,16 @@ TouchAddGrabListener(DeviceIntPtr dev, TouchPointInfoPtr ti,
         if (!xi2mask_isset(grab->xi2mask, dev, XI_TouchOwnership))
             TouchEventHistoryAllocate(ti);
         if (!xi2mask_isset(grab->xi2mask, dev, XI_TouchBegin))
-            type = LISTENER_POINTER_GRAB;
+            type = TOUCH_LISTENER_POINTER_GRAB;
     }
     else if (grab->grabtype == XI || grab->grabtype == CORE) {
         TouchEventHistoryAllocate(ti);
-        type = LISTENER_POINTER_GRAB;
+        type = TOUCH_LISTENER_POINTER_GRAB;
     }
 
     /* grab listeners are always RT_NONE since we keep the grab pointer */
     TouchAddListener(ti, grab->resource, RT_NONE, grab->grabtype,
-                     type, LISTENER_AWAITING_BEGIN, grab->window, grab);
+                     type, TOUCH_LISTENER_AWAITING_BEGIN, grab->window, grab);
 }
 
 /**
@@ -807,7 +738,7 @@ TouchAddRegularListener(DeviceIntPtr dev, TouchPointInfoPtr ti,
     InputClients *iclients = NULL;
     OtherInputMasks *inputMasks = NULL;
     uint16_t evtype = 0;        /* may be event type or emulated event type */
-    enum TouchListenerType type = LISTENER_REGULAR;
+    enum TouchListenerType type = TOUCH_LISTENER_REGULAR;
     int mask;
 
     evtype = GetXI2Type(ev->any.type);
@@ -818,7 +749,7 @@ TouchAddRegularListener(DeviceIntPtr dev, TouchPointInfoPtr ti,
         mask = EventIsDeliverable(dev, TouchGetPointerEventType(ev), win);
         if (mask) {
             evtype = GetXI2Type(TouchGetPointerEventType(ev));
-            type = LISTENER_POINTER_REGULAR;
+            type = TOUCH_LISTENER_POINTER_REGULAR;
         }
     }
     if (!mask)
@@ -835,7 +766,7 @@ TouchAddRegularListener(DeviceIntPtr dev, TouchPointInfoPtr ti,
                 TouchEventHistoryAllocate(ti);
 
             TouchAddListener(ti, iclients->resource, RT_INPUTCLIENT, XI2,
-                             type, LISTENER_AWAITING_BEGIN, win, NULL);
+                             type, TOUCH_LISTENER_AWAITING_BEGIN, win, NULL);
             return TRUE;
         }
     }
@@ -850,7 +781,8 @@ TouchAddRegularListener(DeviceIntPtr dev, TouchPointInfoPtr ti,
 
             TouchEventHistoryAllocate(ti);
             TouchAddListener(ti, iclients->resource, RT_INPUTCLIENT, XI,
-                             LISTENER_POINTER_REGULAR, LISTENER_AWAITING_BEGIN,
+                             TOUCH_LISTENER_POINTER_REGULAR,
+                             TOUCH_LISTENER_AWAITING_BEGIN,
                              win, NULL);
             return TRUE;
         }
@@ -865,7 +797,8 @@ TouchAddRegularListener(DeviceIntPtr dev, TouchPointInfoPtr ti,
         if (IsMaster(dev) && (win->eventMask & core_filter)) {
             TouchEventHistoryAllocate(ti);
             TouchAddListener(ti, win->drawable.id, RT_WINDOW, CORE,
-                             LISTENER_POINTER_REGULAR, LISTENER_AWAITING_BEGIN,
+                             TOUCH_LISTENER_POINTER_REGULAR,
+                             TOUCH_LISTENER_AWAITING_BEGIN,
                              win, NULL);
             return TRUE;
         }
@@ -877,7 +810,7 @@ TouchAddRegularListener(DeviceIntPtr dev, TouchPointInfoPtr ti,
 
             TouchEventHistoryAllocate(ti);
             TouchAddListener(ti, oclients->resource, RT_OTHERCLIENT, CORE,
-                             type, LISTENER_AWAITING_BEGIN, win, NULL);
+                             type, TOUCH_LISTENER_AWAITING_BEGIN, win, NULL);
             return TRUE;
         }
     }
@@ -944,7 +877,7 @@ TouchRemovePointerGrab(DeviceIntPtr dev)
 {
     TouchPointInfoPtr ti;
     GrabPtr grab;
-    DeviceEvent *ev;
+    InternalEvent *ev;
 
     if (!dev->touch)
         return;
@@ -954,10 +887,10 @@ TouchRemovePointerGrab(DeviceIntPtr dev)
         return;
 
     ev = dev->deviceGrab.sync.event;
-    if (!IsTouchEvent((InternalEvent *) ev))
+    if (!IsTouchEvent(ev))
         return;
 
-    ti = TouchFindByClientID(dev, ev->touchid);
+    ti = TouchFindByClientID(dev, ev->device_event.touchid);
     if (!ti)
         return;
 
@@ -1019,7 +952,7 @@ TouchListenerAcceptReject(DeviceIntPtr dev, TouchPointInfoPtr ti, int listener,
         if (mode == XIRejectTouch)
             TouchRejected(dev, ti, ti->listeners[listener].listener, NULL);
         else
-            ti->listeners[listener].state = LISTENER_EARLY_ACCEPT;
+            ti->listeners[listener].state = TOUCH_LISTENER_EARLY_ACCEPT;
 
         return Success;
     }
@@ -1077,7 +1010,7 @@ TouchEndPhysicallyActiveTouches(DeviceIntPtr dev)
     InternalEvent *eventlist = InitEventList(GetMaximumEventsNum());
     int i;
 
-    OsBlockSignals();
+    input_lock();
     mieqProcessInputEvents();
     for (i = 0; i < dev->last.num_touches; i++) {
         DDXTouchPointInfoPtr ddxti = dev->last.touches + i;
@@ -1091,7 +1024,7 @@ TouchEndPhysicallyActiveTouches(DeviceIntPtr dev)
                 mieqProcessDeviceEvent(dev, eventlist + j, NULL);
         }
     }
-    OsReleaseSignals();
+    input_unlock();
 
     FreeEventList(eventlist, GetMaximumEventsNum());
 }
@@ -1118,7 +1051,7 @@ TouchEmitTouchEnd(DeviceIntPtr dev, TouchPointInfoPtr ti, int flags, XID resourc
     flags |= TOUCH_CLIENT_ID;
     if (ti->emulate_pointer)
         flags |= TOUCH_POINTER_EMULATED;
-    TouchDeliverDeviceClassesChangedEvent(ti, GetTimeInMillis(), resource);
+    DeliverDeviceClassesChangedEvent(ti->sourceid, GetTimeInMillis());
     GetDixTouchEnd(&event, dev, ti, flags);
     DeliverTouchEvents(dev, ti, &event, resource);
     if (ti->num_grabs == 0)

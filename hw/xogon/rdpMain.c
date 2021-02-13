@@ -167,17 +167,17 @@ static int set_bpp(int bpp)
 	return rv;
 }
 
-static void rdpWakeupHandler(void *blockData, int result, void *pReadmask)
+static void rdpWakeupHandler(void *blockData, int result)
 {
 	/*
 	 * If select returns -1 the sets are undefined.
 	 * don't process the sets in that case.
 	 */
-	if (result < 0)
-	{
-		return;
-	}
-	rdp_check(blockData, result, pReadmask);
+	// if (result < 0)
+	// {
+	// 	return;
+	// }
+	// rdp_check(blockData, result, pReadmask);
 }
 
 static void rdpBlockHandler(void *blockData, OSTimePtr pTimeout, void *pReadmask)
@@ -477,6 +477,15 @@ int ddxProcessArgument(int argc, char** argv, int i)
 	return 0;
 }
 
+#if INPUTTHREAD
+/** This function is called in Xserver/os/inputthread.c when starting
+    the input thread. */
+void
+ddxInputThreadInit(void)
+{
+}
+#endif
+
 void OsVendorInit(void)
 {
 
@@ -519,8 +528,6 @@ void InitOutput(ScreenInfo* pScreenInfo, int argc, char** argv)
 	DEBUG_OUT("InitOutput:\n");
 	g_initOutputCalled = 1;
 
-	LoadExtensionList(rdpExtensions, ARRAY_SIZE(rdpExtensions), TRUE);
-
 	/* initialize pixmap formats */
 	pScreenInfo->imageByteOrder = IMAGE_BYTE_ORDER;
 	pScreenInfo->bitmapScanlineUnit = BITMAP_SCANLINE_UNIT;
@@ -544,6 +551,8 @@ void InitOutput(ScreenInfo* pScreenInfo, int argc, char** argv)
 	{
 		FatalError("Couldn't add screen\n");
 	}
+
+	xorgGlxCreateVendor();
 
 	DEBUG_OUT("InitOutput: out\n");
 }

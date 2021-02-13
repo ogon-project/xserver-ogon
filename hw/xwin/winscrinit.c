@@ -38,45 +38,9 @@
 #include "win.h"
 #include "winmsg.h"
 
-#ifdef XWIN_MULTIWINDOWEXTWM
-static RootlessFrameProcsRec winMWExtWMProcs = {
-    winMWExtWMCreateFrame,
-    winMWExtWMDestroyFrame,
-
-    winMWExtWMMoveFrame,
-    winMWExtWMResizeFrame,
-    winMWExtWMRestackFrame,
-    winMWExtWMReshapeFrame,
-    winMWExtWMUnmapFrame,
-
-    winMWExtWMStartDrawing,
-    winMWExtWMStopDrawing,
-    winMWExtWMUpdateRegion,
-    winMWExtWMDamageRects,
-    winMWExtWMRootlessSwitchWindow,
-    NULL,                       //winMWExtWMDoReorderWindow,
-    NULL,                       //winMWExtWMHideWindow,
-    NULL,                       //winMWExtWMUpdateColorMap,
-
-    NULL,                       //winMWExtWMCopyBytes,
-    winMWExtWMCopyWindow
-};
-#endif
-
-/*
- * Prototypes
- */
-
-/*
- * Local functions
- */
-
-static Bool
- winSaveScreen(ScreenPtr pScreen, int on);
-
 /*
  * Determine what type of screen we are initializing
- * and call the appropriate procedure to intiailize
+ * and call the appropriate procedure to initialize
  * that type of screen.
  */
 
@@ -89,8 +53,8 @@ winScreenInit(ScreenPtr pScreen, int argc, char **argv)
     DWORD dwInitialBPP;
 
 #if CYGDEBUG || YES
-    winDebug("winScreenInit - dwWidth: %ld dwHeight: %ld\n",
-             pScreenInfo->dwWidth, pScreenInfo->dwHeight);
+    winDebug("winScreenInit - dwWidth: %u dwHeight: %u\n",
+             (unsigned int)pScreenInfo->dwWidth, (unsigned int)pScreenInfo->dwHeight);
 #endif
 
     /* Allocate privates for this screen */
@@ -137,7 +101,7 @@ winScreenInit(ScreenPtr pScreen, int argc, char **argv)
     else if (dwInitialBPP != pScreenInfo->dwBPP) {
         /* Warn user if engine forced a depth different to -depth parameter */
         ErrorF
-            ("winScreenInit - Command line depth of %d bpp overidden by engine, using %d bpp\n",
+            ("winScreenInit - Command line depth of %d bpp overridden by engine, using %d bpp\n",
              (int) dwInitialBPP, (int) pScreenInfo->dwBPP);
     }
     else {
@@ -216,15 +180,19 @@ winScreenInit(ScreenPtr pScreen, int argc, char **argv)
     else
         winErrorFVerb(2, "winScreenInit - Using software cursor\n");
 
-    /*
-       Note the screen origin in a normalized coordinate space where (0,0) is at the top left
-       of the native virtual desktop area
-     */
-    pScreen->x = pScreenInfo->dwInitialX - GetSystemMetrics(SM_XVIRTUALSCREEN);
-    pScreen->y = pScreenInfo->dwInitialY - GetSystemMetrics(SM_YVIRTUALSCREEN);
+    if (!noPanoramiXExtension) {
+        /*
+           Note the screen origin in a normalized coordinate space where (0,0) is at the top left
+           of the native virtual desktop area
+         */
+        pScreen->x =
+            pScreenInfo->dwInitialX - GetSystemMetrics(SM_XVIRTUALSCREEN);
+        pScreen->y =
+            pScreenInfo->dwInitialY - GetSystemMetrics(SM_YVIRTUALSCREEN);
 
-    ErrorF("Screen %d added at virtual desktop coordinate (%d,%d).\n",
-           pScreen->myNum, pScreen->x, pScreen->y);
+        ErrorF("Screen %d added at virtual desktop coordinate (%d,%d).\n",
+               pScreen->myNum, pScreen->x, pScreen->y);
+    }
 
 #if CYGDEBUG || YES
     winDebug("winScreenInit - returning\n");
@@ -260,9 +228,7 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
     winScreenInfo *pScreenInfo = pScreenPriv->pScreenInfo;
     VisualPtr pVisual = NULL;
 
-#if defined(XWIN_CLIPBOARD) || defined(XWIN_MULTIWINDOW)
     int iReturn;
-#endif
 
     /* Create framebuffer */
     if (!(*pScreenPriv->pwinInitScreen) (pScreen)) {
@@ -292,6 +258,11 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
         return FALSE;
     }
 
+    if ((pScreenInfo->dwBPP == 8) && (pScreenInfo->fCompositeWM)) {
+        ErrorF("-compositewm disabled due to 8bpp depth\n");
+        pScreenInfo->fCompositeWM = FALSE;
+    }
+
     /* Apparently we need this for the render extension */
     miSetPixmapDepths();
 
@@ -309,8 +280,6 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
     if (pScreenInfo->dwDepth == 8
         && (pScreenInfo->dwEngine == WIN_SERVER_SHADOW_GDI
             || (pScreenInfo->dwEngine == WIN_SERVER_SHADOW_DDNL
-                && pScreenInfo->fFullScreen)
-            || (pScreenInfo->dwEngine == WIN_SERVER_SHADOW_DD
                 && pScreenInfo->fFullScreen))) {
         winSetColormapFunctions(pScreen);
 
@@ -319,16 +288,13 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
          * own colormap, as it cannot allocate 7 planes in the default
          * colormap.  Setting whitePixel to 1 allows Magic to get 7
          * planes in the default colormap, so it doesn't create its
-         * own colormap.  This latter situation is highly desireable,
+         * own colormap.  This latter situation is highly desirable,
          * as it keeps the Magic window viewable when switching to
          * other X clients that use the default colormap.
          */
         pScreen->blackPixel = 0;
         pScreen->whitePixel = 1;
     }
-
-    /* Place our save screen function */
-    pScreen->SaveScreen = winSaveScreen;
 
     /* Finish fb initialization */
     if (!fbFinishScreenInit(pScreen,
@@ -384,12 +350,7 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
 
     /* Initialize the shadow framebuffer layer */
     if ((pScreenInfo->dwEngine == WIN_SERVER_SHADOW_GDI
-         || pScreenInfo->dwEngine == WIN_SERVER_SHADOW_DD
-         || pScreenInfo->dwEngine == WIN_SERVER_SHADOW_DDNL)
-#ifdef XWIN_MULTIWINDOWEXTWM
-        && !pScreenInfo->fMWExtWM
-#endif
-        ) {
+         || pScreenInfo->dwEngine == WIN_SERVER_SHADOW_DDNL)) {
 #if CYGDEBUG
         winDebug("winFinishScreenInitFB - Calling shadowSetup ()\n");
 #endif
@@ -403,23 +364,6 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
         pScreenPriv->pwinCreateScreenResources = pScreen->CreateScreenResources;
         pScreen->CreateScreenResources = winCreateScreenResources;
     }
-
-#ifdef XWIN_MULTIWINDOWEXTWM
-    /* Handle multi-window external window manager mode */
-    if (pScreenInfo->fMWExtWM) {
-        winDebug("winScreenInit - MultiWindowExtWM - Calling RootlessInit\n");
-
-        RootlessInit(pScreen, &winMWExtWMProcs);
-
-        winDebug("winScreenInit - MultiWindowExtWM - RootlessInit returned\n");
-
-        rootless_CopyBytes_threshold = 0;
-        /* FIXME: How many? Profiling needed? */
-        rootless_CopyWindow_threshold = 1;
-
-        winWindowsWMExtensionInit();
-    }
-#endif
 
     /* Handle rootless mode */
     if (pScreenInfo->fRootless) {
@@ -454,7 +398,6 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
 #undef WRAP
     }
 
-#ifdef XWIN_MULTIWINDOW
     /* Handle multi window mode */
     else if (pScreenInfo->fMultiWindow) {
         /* Define the WRAP macro temporarily for local use */
@@ -479,6 +422,7 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
         WRAP(MoveWindow);
         WRAP(CopyWindow);
         WRAP(SetShape);
+        WRAP(ModifyPixmapHeader);
 
         /* Assign multi-window window procedures to be top level procedures */
         pScreen->CreateWindow = winCreateWindowMultiWindow;
@@ -494,16 +438,20 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
         pScreen->CopyWindow = winCopyWindowMultiWindow;
         pScreen->SetShape = winSetShapeMultiWindow;
 
+        if (pScreenInfo->fCompositeWM) {
+            pScreen->CreatePixmap = winCreatePixmapMultiwindow;
+            pScreen->DestroyPixmap = winDestroyPixmapMultiwindow;
+            pScreen->ModifyPixmapHeader = winModifyPixmapHeaderMultiwindow;
+        }
+
         /* Undefine the WRAP macro, as it is not needed elsewhere */
 #undef WRAP
     }
-#endif
 
     /* Wrap either fb's or shadow's CloseScreen with our CloseScreen */
     pScreenPriv->CloseScreen = pScreen->CloseScreen;
     pScreen->CloseScreen = pScreenPriv->pwinCloseScreen;
 
-#if defined(XWIN_CLIPBOARD) || defined(XWIN_MULTIWINDOW)
     /* Create a mutex for modules in separate threads to wait for */
     iReturn = pthread_mutex_init(&pScreenPriv->pmServerStarted, NULL);
     if (iReturn != 0) {
@@ -522,21 +470,9 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
 
     /* Set the ServerStarted flag to false */
     pScreenPriv->fServerStarted = FALSE;
-#endif
 
-#ifdef XWIN_MULTIWINDOWEXTWM
-    pScreenPriv->fRestacking = FALSE;
-#endif
 
-#if defined(XWIN_MULTIWINDOW) || defined(XWIN_MULTIWINDOWEXTWM)
-    if (FALSE
-#ifdef XWIN_MULTIWINDOW
-        || pScreenInfo->fMultiWindow
-#endif
-#ifdef XWIN_MULTIWINDOWEXTWM
-        || pScreenInfo->fInternalWM
-#endif
-        ) {
+    if (pScreenInfo->fMultiWindow) {
 #if CYGDEBUG || YES
         winDebug("winFinishScreenInitFB - Calling winInitWM.\n");
 #endif
@@ -546,16 +482,13 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
                        &pScreenPriv->ptWMProc,
                        &pScreenPriv->ptXMsgProc,
                        &pScreenPriv->pmServerStarted,
-                       pScreenInfo->dwScreen, (HWND) &pScreenPriv->hwndScreen,
-#ifdef XWIN_MULTIWINDOWEXTWM
-                       pScreenInfo->fInternalWM ||
-#endif
-                       FALSE)) {
+                       pScreenInfo->dwScreen,
+                       (HWND) &pScreenPriv->hwndScreen,
+                       pScreenInfo->fCompositeWM)) {
             ErrorF("winFinishScreenInitFB - winInitWM () failed.\n");
             return FALSE;
         }
     }
-#endif
 
     /* Tell the server that we are enabled */
     pScreenPriv->fEnabled = TRUE;
@@ -567,12 +500,5 @@ winFinishScreenInitFB(int i, ScreenPtr pScreen, int argc, char **argv)
     winDebug("winFinishScreenInitFB - returning\n");
 #endif
 
-    return TRUE;
-}
-
-/* See Porting Layer Definition - p. 33 */
-static Bool
-winSaveScreen(ScreenPtr pScreen, int on)
-{
     return TRUE;
 }

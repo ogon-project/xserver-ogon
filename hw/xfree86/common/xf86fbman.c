@@ -317,16 +317,17 @@ localRegisterFreeBoxCallback(ScreenPtr pScreen,
 
     offman = (FBManagerPtr) dixLookupPrivate(&pScreen->devPrivates,
                                              xf86FBScreenKey);
-    newCallbacks = realloc(offman->FreeBoxesUpdateCallback,
-                           sizeof(FreeBoxCallbackProcPtr) *
-                           (offman->NumCallbacks + 1));
+    newCallbacks = reallocarray(offman->FreeBoxesUpdateCallback,
+                                offman->NumCallbacks + 1,
+                                sizeof(FreeBoxCallbackProcPtr));
     if (!newCallbacks)
         return FALSE;
     else
         offman->FreeBoxesUpdateCallback = newCallbacks;
 
-    newPrivates = realloc(offman->devPrivates,
-                          sizeof(DevUnion) * (offman->NumCallbacks + 1));
+    newPrivates = reallocarray(offman->devPrivates,
+                               offman->NumCallbacks + 1,
+                               sizeof(DevUnion));
     if (!newPrivates)
         return FALSE;
     else
@@ -381,7 +382,7 @@ AllocateArea(FBManagerPtr offman,
         break;
     }
 
-    /* try to boot a removeable one out if we are not expendable ourselves */
+    /* try to boot a removable one out if we are not expendable ourselves */
     if (!area && !removeCB) {
         link = offman->UsedAreas;
 
@@ -1055,7 +1056,7 @@ localResizeOffscreenLinear(FBLinearPtr resize, int length)
             return FALSE;
     }
 
-    /* This could actually be alot smarter and try to move allocations
+    /* This could actually be a lot smarter and try to move allocations
        from XY to linear when available.  For now if it was XY, we keep
        it XY */
 

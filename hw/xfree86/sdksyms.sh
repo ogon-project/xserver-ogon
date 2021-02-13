@@ -21,13 +21,13 @@ cat > sdksyms.c << EOF
 #include "picturestr.h"
 
 
-/* fb/Makefile.am -- module */
-/*
+/* fb/Makefile.am */
 #include "fb.h"
 #include "fbrop.h"
 #include "fboverlay.h"
-#include "wfbrename.h"
 #include "fbpict.h"
+/* wfb is still a module
+#include "wfbrename.h"
  */
 
 
@@ -54,20 +54,25 @@ cat > sdksyms.c << EOF
 #include "xvmcext.h"
 #endif
 #include "geext.h"
-#include "geint.h"
 #ifdef MITSHM
 #include "shmint.h"
 #endif
 #include "syncsdk.h"
-#if XINERAMA
+#ifdef XINERAMA
 # include "panoramiXsrv.h"
 # include "panoramiX.h"
 #endif
 
+/* glx/Makefile.am */
+#ifdef GLX
+#include "vndserver.h"
+#endif
 
 /* hw/xfree86/int10/Makefile.am -- module */
 /*
 #include "xf86int10.h"
+#include "vbe.h"
+#include "vbeModes.h"
  */
 
 
@@ -98,7 +103,7 @@ cat > sdksyms.c << EOF
 
 
 /* hw/xfree86/dri2/Makefile.am -- module */
-#if DRI2
+#ifdef DRI2
 # include "dri2.h"
 #endif
 
@@ -118,7 +123,6 @@ cat > sdksyms.c << EOF
 
 /* hw/xfree86/common/Makefile.am */
 #include "compiler.h"
-#include "fourcc.h"
 #include "xf86.h"
 #include "xf86Module.h"
 #include "xf86Opt.h"
@@ -132,13 +136,10 @@ cat > sdksyms.c << EOF
 #include "xf86str.h"
 #include "xf86Xinput.h"
 #include "xisb.h"
-#if XV
+#ifdef XV
 # include "xf86xv.h"
 # include "xf86xvmc.h"
 # include "xf86xvpriv.h"
-#endif
-#if XF86VIDMODE
-# include "vidmodeproc.h"
 #endif
 #include "xorgVersion.h"
 #if defined(__sparc__) || defined(__sparc)
@@ -147,11 +148,7 @@ cat > sdksyms.c << EOF
 
 
 /* hw/xfree86/ramdac/Makefile.am */
-#include "BT.h"
-#include "IBM.h"
-#include "TI.h"
 #include "xf86Cursor.h"
-#include "xf86RamDac.h"
 
 
 /* hw/xfree86/shadowfb/Makefile.am -- module */
@@ -180,26 +177,13 @@ cat > sdksyms.c << EOF
 #endif
 
 
-/* hw/xfree86/dixmods/extmod/Makefile.am -- module */
-#ifdef XFreeXDGA
-#include "dgaproc.h"
-#endif
-
-
 /* hw/xfree86/parser/Makefile.am */
 #include "xf86Parser.h"
 #include "xf86Optrec.h"
 
 
-/* hw/xfree86/vbe/Makefile.am -- module */
-/*
-#include "vbe.h"
-#include "vbeModes.h"
- */
-
-
 /* hw/xfree86/dri/Makefile.am -- module */
-#if XF86DRI
+#ifdef XF86DRI
 # include "dri.h"
 # include "sarea.h"
 # include "dristruct.h"
@@ -261,12 +245,12 @@ cat > sdksyms.c << EOF
 #define _FONTPROTO_H
 #include "dixfont.h"
 #include "dixfontstr.h"
-#include "dixfontstubs.h"
 #include "dixgrabs.h"
 #include "dixstruct.h"
 #include "exevents.h"
 #include "extension.h"
 #include "extnsionst.h"
+#include "fourcc.h"
 #include "gc.h"
 #include "gcstruct.h"
 #include "globals.h"
@@ -294,9 +278,6 @@ cat > sdksyms.c << EOF
 #include "scrnintstr.h"
 #include "selection.h"
 #include "servermd.h"
-#include "site.h"
-#include "swaprep.h"
-#include "swapreq.h"
 #include "validate.h"
 #include "window.h"
 #include "windowstr.h"
@@ -309,35 +290,51 @@ cat > sdksyms.c << EOF
 
 EOF
 
-topdir=$1
+topdir=$(readlink -f $1)
 shift
 LC_ALL=C
 export LC_ALL
 ${CPP:-cpp} "$@" sdksyms.c > /dev/null || exit $?
 ${CPP:-cpp} "$@" sdksyms.c | ${AWK:-awk} -v topdir=$topdir '
+function basename(file) {
+    sub(".*/", "", file)
+    return file
+}
 BEGIN {
     sdk = 0;
     print("/*");
     print(" * These symbols are referenced to ensure they");
     print(" * will be available in the X Server binary.");
     print(" */");
-    printf("/* topdir=%s */\n", topdir);
     print("_X_HIDDEN void *xorg_symbols[] = {");
 
     printf("sdksyms.c:") > "sdksyms.dep";
 }
 /^# [0-9]+ "/ {
-    #   Process text after a include in a relative path or when the
-    # processed file has a basename matching $top_srcdir.
-    #   Note that indexing starts at 1; 0 means no match, and there
-    # is a starting ".
-    sdk = $3 !~ /^"\// || index($3, topdir) == 2;
+    # Match preprocessor linemarkers which have the form:
+    # # linenum "filename" flags
+    #
+    # Only process text for sdk exports where the linemarker filename has a
+    # relative path, or an absolute path matching $top_srcdir.
+    #
+
+    # canonicalize filename
+    if ($3 in canonicalized) {
+	c = canonicalized[$3]
+    } else {
+	cmd = "readlink -f " $3
+	cmd | getline c
+	close(cmd)
+        canonicalized[$3] = c
+    }
+    # note that index() starts at 1; 0 means no match.
+    sdk = $3 !~ /^"\// || index(c, topdir) == 1;
 
     if (sdk && $3 ~ /\.h"$/) {
 	# remove quotes
 	gsub(/"/, "", $3);
 	line = $2;
-	header = $3;
+	header = basename($3);
 	if (! headers[$3]) {
 	    printf(" \\\n  %s", $3) >> "sdksyms.dep";
 	    headers[$3] = 1;
@@ -369,6 +366,17 @@ BEGIN {
                n = 1;
             }
         }
+	# hack: pid_t becomes __pid_t on NetBSD, same for uint32_t -> __uint32_t.
+	# GCC 5 inserts additional lines around this.
+        if (($1 == "__pid_t" || $1 == "__uint32_t") && NF == 1) {
+            getline;
+            n++;
+            # skip line numbers GCC 5 adds (after typedef return type?)
+            while ($n == "" || $0 ~ /^# [0-9]+ "/) {
+               getline;
+               n = 1;
+            }
+	}
 
 	# type specifier may not be set, as in
 	#   extern _X_EXPORT unsigned name(...)
@@ -411,7 +419,8 @@ BEGIN {
 	sub(/[^a-zA-Z0-9_].*/, "", symbol);
 
 	#print;
-	printf("    (void *) &%-50s /* %s:%s */\n", symbol ",", header, line);
+	if (symbol != "")
+	    printf("    (void *) &%-50s /* %s:%s */\n", symbol ",", header, line);
     }
 }
 

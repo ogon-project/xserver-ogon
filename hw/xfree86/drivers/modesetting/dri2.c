@@ -42,10 +42,11 @@
 #include "driver.h"
 #include "dri2.h"
 
-#ifdef GLAMOR
+#ifdef GLAMOR_HAS_GBM
 
 enum ms_dri2_frame_event_type {
     MS_DRI2_QUEUE_SWAP,
+    MS_DRI2_QUEUE_FLIP,
     MS_DRI2_WAIT_MSC,
 };
 
@@ -97,10 +98,8 @@ ms_get_resource(XID id, RESTYPE type)
     if (resource == NULL)
         return NULL;
 
-    if (!AddResource(id, type, resource)) {
-        free(resource);
+    if (!AddResource(id, type, resource))
         return NULL;
-    }
 
     resource->id = id;
     resource->type = type;
@@ -119,27 +118,16 @@ get_drawable_pixmap(DrawablePtr drawable)
         return screen->GetWindowPixmap((WindowPtr) drawable);
 }
 
-static PixmapPtr
-get_front_buffer(DrawablePtr drawable)
-{
-    PixmapPtr pixmap;
-
-    pixmap = get_drawable_pixmap(drawable);
-    pixmap->refcnt++;
-
-    return pixmap;
-}
-
 static DRI2Buffer2Ptr
-ms_dri2_create_buffer(DrawablePtr drawable, unsigned int attachment,
-                      unsigned int format)
+ms_dri2_create_buffer2(ScreenPtr screen, DrawablePtr drawable,
+                       unsigned int attachment, unsigned int format)
 {
-    ScreenPtr screen = drawable->pScreen;
     ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
+    modesettingPtr ms = modesettingPTR(scrn);
     DRI2Buffer2Ptr buffer;
     PixmapPtr pixmap;
-    uint32_t size;
-    uint16_t pitch;
+    CARD32 size;
+    CARD16 pitch;
     ms_dri2_buffer_private_ptr private;
 
     buffer = calloc(1, sizeof *buffer);
@@ -153,8 +141,13 @@ ms_dri2_create_buffer(DrawablePtr drawable, unsigned int attachment,
     }
 
     pixmap = NULL;
-    if (attachment == DRI2BufferFrontLeft)
-        pixmap = get_front_buffer(drawable);
+    if (attachment == DRI2BufferFrontLeft) {
+        pixmap = get_drawable_pixmap(drawable);
+        if (pixmap && pixmap->drawable.pScreen != screen)
+            pixmap = NULL;
+        if (pixmap)
+            pixmap->refcnt++;
+    }
 
     if (pixmap == NULL) {
         int pixmap_width = drawable->width;
@@ -194,8 +187,6 @@ ms_dri2_create_buffer(DrawablePtr drawable, unsigned int attachment,
                                       pixmap_cpp,
                                       0);
         if (pixmap == NULL) {
-            if (pixmap)
-                screen->DestroyPixmap(pixmap);
             free(private);
             free(buffer);
             return NULL;
@@ -210,7 +201,7 @@ ms_dri2_create_buffer(DrawablePtr drawable, unsigned int attachment,
      */
     buffer->flags = 0;
 
-    buffer->name = glamor_name_from_pixmap(pixmap, &pitch, &size);
+    buffer->name = ms->glamor.name_from_pixmap(pixmap, &pitch, &size);
     buffer->pitch = pitch;
     if (buffer->name == -1) {
         xf86DrvMsg(scrn->scrnIndex, X_ERROR,
@@ -228,6 +219,14 @@ ms_dri2_create_buffer(DrawablePtr drawable, unsigned int attachment,
     return buffer;
 }
 
+static DRI2Buffer2Ptr
+ms_dri2_create_buffer(DrawablePtr drawable, unsigned int attachment,
+                      unsigned int format)
+{
+    return ms_dri2_create_buffer2(drawable->pScreen, drawable, attachment,
+                                  format);
+}
+
 static void
 ms_dri2_reference_buffer(DRI2Buffer2Ptr buffer)
 {
@@ -237,7 +236,8 @@ ms_dri2_reference_buffer(DRI2Buffer2Ptr buffer)
     }
 }
 
-static void ms_dri2_destroy_buffer(DrawablePtr drawable, DRI2Buffer2Ptr buffer)
+static void ms_dri2_destroy_buffer2(ScreenPtr unused, DrawablePtr unused2,
+                                    DRI2Buffer2Ptr buffer)
 {
     if (!buffer)
         return;
@@ -255,21 +255,46 @@ static void ms_dri2_destroy_buffer(DrawablePtr drawable, DRI2Buffer2Ptr buffer)
     }
 }
 
+static void ms_dri2_destroy_buffer(DrawablePtr drawable, DRI2Buffer2Ptr buffer)
+{
+    ms_dri2_destroy_buffer2(NULL, drawable, buffer);
+}
+
 static void
-ms_dri2_copy_region(DrawablePtr drawable, RegionPtr pRegion,
-                    DRI2BufferPtr destBuffer, DRI2BufferPtr sourceBuffer)
+ms_dri2_copy_region2(ScreenPtr screen, DrawablePtr drawable, RegionPtr pRegion,
+                     DRI2BufferPtr destBuffer, DRI2BufferPtr sourceBuffer)
 {
     ms_dri2_buffer_private_ptr src_priv = sourceBuffer->driverPrivate;
     ms_dri2_buffer_private_ptr dst_priv = destBuffer->driverPrivate;
     PixmapPtr src_pixmap = src_priv->pixmap;
     PixmapPtr dst_pixmap = dst_priv->pixmap;
-    ScreenPtr screen = drawable->pScreen;
     DrawablePtr src = (sourceBuffer->attachment == DRI2BufferFrontLeft)
         ? drawable : &src_pixmap->drawable;
     DrawablePtr dst = (destBuffer->attachment == DRI2BufferFrontLeft)
         ? drawable : &dst_pixmap->drawable;
+    int off_x = 0, off_y = 0;
+    Bool translate = FALSE;
     RegionPtr pCopyClip;
     GCPtr gc;
+
+    if (destBuffer->attachment == DRI2BufferFrontLeft &&
+             drawable->pScreen != screen) {
+        dst = DRI2UpdatePrime(drawable, destBuffer);
+        if (!dst)
+            return;
+        if (dst != drawable)
+            translate = TRUE;
+    }
+
+    if (translate && drawable->type == DRAWABLE_WINDOW) {
+#ifdef COMPOSITE
+        PixmapPtr pixmap = get_drawable_pixmap(drawable);
+        off_x = -pixmap->screen_x;
+        off_y = -pixmap->screen_y;
+#endif
+        off_x += drawable->x;
+        off_y += drawable->y;
+    }
 
     gc = GetScratchGC(dst->depth, screen);
     if (!gc)
@@ -277,6 +302,8 @@ ms_dri2_copy_region(DrawablePtr drawable, RegionPtr pRegion,
 
     pCopyClip = REGION_CREATE(screen, NULL, 0);
     REGION_COPY(screen, pCopyClip, pRegion);
+    if (translate)
+        REGION_TRANSLATE(screen, pCopyClip, off_x, off_y);
     (*gc->funcs->ChangeClip) (gc, CT_REGION, pCopyClip, 0);
     ValidateGC(dst, gc);
 
@@ -292,9 +319,17 @@ ms_dri2_copy_region(DrawablePtr drawable, RegionPtr pRegion,
     gc->ops->CopyArea(src, dst, gc,
                       0, 0,
                       drawable->width, drawable->height,
-                      0, 0);
+                      off_x, off_y);
 
     FreeScratchGC(gc);
+}
+
+static void
+ms_dri2_copy_region(DrawablePtr drawable, RegionPtr pRegion,
+                    DRI2BufferPtr destBuffer, DRI2BufferPtr sourceBuffer)
+{
+    ms_dri2_copy_region2(drawable->pScreen, drawable, pRegion, destBuffer,
+                         sourceBuffer);
 }
 
 static uint64_t
@@ -401,6 +436,203 @@ ms_dri2_blit_swap(DrawablePtr drawable,
     ms_dri2_copy_region(drawable, &region, dst, src);
 }
 
+struct ms_dri2_vblank_event {
+    XID drawable_id;
+    ClientPtr client;
+    DRI2SwapEventPtr event_complete;
+    void *event_data;
+};
+
+static void
+ms_dri2_flip_abort(modesettingPtr ms, void *data)
+{
+    struct ms_present_vblank_event *event = data;
+
+    ms->drmmode.dri2_flipping = FALSE;
+    free(event);
+}
+
+static void
+ms_dri2_flip_handler(modesettingPtr ms, uint64_t msc,
+                     uint64_t ust, void *data)
+{
+    struct ms_dri2_vblank_event *event = data;
+    uint32_t frame = msc;
+    uint32_t tv_sec = ust / 1000000;
+    uint32_t tv_usec = ust % 1000000;
+    DrawablePtr drawable;
+    int status;
+
+    status = dixLookupDrawable(&drawable, event->drawable_id, serverClient,
+                               M_ANY, DixWriteAccess);
+    if (status == Success)
+        DRI2SwapComplete(event->client, drawable, frame, tv_sec, tv_usec,
+                         DRI2_FLIP_COMPLETE, event->event_complete,
+                         event->event_data);
+
+    ms->drmmode.dri2_flipping = FALSE;
+    free(event);
+}
+
+static Bool
+ms_dri2_schedule_flip(ms_dri2_frame_event_ptr info)
+{
+    DrawablePtr draw = info->drawable;
+    ScreenPtr screen = draw->pScreen;
+    ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
+    modesettingPtr ms = modesettingPTR(scrn);
+    ms_dri2_buffer_private_ptr back_priv = info->back->driverPrivate;
+    struct ms_dri2_vblank_event *event;
+    drmmode_crtc_private_ptr drmmode_crtc = info->crtc->driver_private;
+
+    event = calloc(1, sizeof(struct ms_dri2_vblank_event));
+    if (!event)
+        return FALSE;
+
+    event->drawable_id = draw->id;
+    event->client = info->client;
+    event->event_complete = info->event_complete;
+    event->event_data = info->event_data;
+
+    if (ms_do_pageflip(screen, back_priv->pixmap, event,
+                       drmmode_crtc->vblank_pipe, FALSE,
+                       ms_dri2_flip_handler,
+                       ms_dri2_flip_abort,
+                       "DRI2-flip")) {
+        ms->drmmode.dri2_flipping = TRUE;
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static Bool
+update_front(DrawablePtr draw, DRI2BufferPtr front)
+{
+    ScreenPtr screen = draw->pScreen;
+    PixmapPtr pixmap = get_drawable_pixmap(draw);
+    ms_dri2_buffer_private_ptr priv = front->driverPrivate;
+    modesettingPtr ms = modesettingPTR(xf86ScreenToScrn(screen));
+    CARD32 size;
+    CARD16 pitch;
+    int name;
+
+    name = ms->glamor.name_from_pixmap(pixmap, &pitch, &size);
+    if (name < 0)
+        return FALSE;
+
+    front->name = name;
+
+    (*screen->DestroyPixmap) (priv->pixmap);
+    front->pitch = pixmap->devKind;
+    front->cpp = pixmap->drawable.bitsPerPixel / 8;
+    priv->pixmap = pixmap;
+    pixmap->refcnt++;
+
+    return TRUE;
+}
+
+static Bool
+can_exchange(ScrnInfoPtr scrn, DrawablePtr draw,
+	     DRI2BufferPtr front, DRI2BufferPtr back)
+{
+    ms_dri2_buffer_private_ptr front_priv = front->driverPrivate;
+    ms_dri2_buffer_private_ptr back_priv = back->driverPrivate;
+    PixmapPtr front_pixmap;
+    PixmapPtr back_pixmap = back_priv->pixmap;
+    xf86CrtcConfigPtr config = XF86_CRTC_CONFIG_PTR(scrn);
+    int num_crtcs_on = 0;
+    int i;
+
+    for (i = 0; i < config->num_crtc; i++) {
+        drmmode_crtc_private_ptr drmmode_crtc = config->crtc[i]->driver_private;
+
+        /* Don't do pageflipping if CRTCs are rotated. */
+#ifdef GLAMOR_HAS_GBM
+        if (drmmode_crtc->rotate_bo.gbm)
+            return FALSE;
+#endif
+
+        if (ms_crtc_on(config->crtc[i]))
+            num_crtcs_on++;
+    }
+
+    /* We can't do pageflipping if all the CRTCs are off. */
+    if (num_crtcs_on == 0)
+        return FALSE;
+
+    if (!update_front(draw, front))
+        return FALSE;
+
+    front_pixmap = front_priv->pixmap;
+
+    if (front_pixmap->drawable.width != back_pixmap->drawable.width)
+        return FALSE;
+
+    if (front_pixmap->drawable.height != back_pixmap->drawable.height)
+        return FALSE;
+
+    if (front_pixmap->drawable.bitsPerPixel !=
+        back_pixmap->drawable.bitsPerPixel)
+        return FALSE;
+
+    if (front_pixmap->devKind != back_pixmap->devKind)
+        return FALSE;
+
+    return TRUE;
+}
+
+static Bool
+can_flip(ScrnInfoPtr scrn, DrawablePtr draw,
+	 DRI2BufferPtr front, DRI2BufferPtr back)
+{
+    modesettingPtr ms = modesettingPTR(scrn);
+
+    return draw->type == DRAWABLE_WINDOW &&
+        ms->drmmode.pageflip &&
+        !ms->drmmode.sprites_visible &&
+        !ms->drmmode.present_flipping &&
+        scrn->vtSema &&
+        DRI2CanFlip(draw) && can_exchange(scrn, draw, front, back);
+}
+
+static void
+ms_dri2_exchange_buffers(DrawablePtr draw, DRI2BufferPtr front,
+                         DRI2BufferPtr back)
+{
+    ms_dri2_buffer_private_ptr front_priv = front->driverPrivate;
+    ms_dri2_buffer_private_ptr back_priv = back->driverPrivate;
+    ScreenPtr screen = draw->pScreen;
+    ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
+    modesettingPtr ms = modesettingPTR(scrn);
+    msPixmapPrivPtr front_pix = msGetPixmapPriv(&ms->drmmode, front_priv->pixmap);
+    msPixmapPrivPtr back_pix = msGetPixmapPriv(&ms->drmmode, back_priv->pixmap);
+    msPixmapPrivRec tmp_pix;
+    RegionRec region;
+    int tmp;
+
+    /* Swap BO names so DRI works */
+    tmp = front->name;
+    front->name = back->name;
+    back->name = tmp;
+
+    /* Swap pixmap privates */
+    tmp_pix = *front_pix;
+    *front_pix = *back_pix;
+    *back_pix = tmp_pix;
+
+    ms->glamor.egl_exchange_buffers(front_priv->pixmap, back_priv->pixmap);
+
+    /* Post damage on the front buffer so that listeners, such
+     * as DisplayLink know take a copy and shove it over the USB.
+     */
+    region.extents.x1 = region.extents.y1 = 0;
+    region.extents.x2 = front_priv->pixmap->drawable.width;
+    region.extents.y2 = front_priv->pixmap->drawable.height;
+    region.data = NULL;
+    DamageRegionAppend(&front_priv->pixmap->drawable, &region);
+    DamageRegionProcessPending(&front_priv->pixmap->drawable);
+}
+
 static void
 ms_dri2_frame_event_handler(uint64_t msc,
                             uint64_t usec,
@@ -419,6 +651,13 @@ ms_dri2_frame_event_handler(uint64_t msc,
     }
 
     switch (frame_info->type) {
+    case MS_DRI2_QUEUE_FLIP:
+        if (can_flip(scrn, drawable, frame_info->front, frame_info->back) &&
+            ms_dri2_schedule_flip(frame_info)) {
+            ms_dri2_exchange_buffers(drawable, frame_info->front, frame_info->back);
+            break;
+        }
+        /* else fall through to blit */
     case MS_DRI2_QUEUE_SWAP:
         ms_dri2_blit_swap(drawable, frame_info->front, frame_info->back);
         DRI2SwapComplete(frame_info->client, drawable, msc, tv_sec, tv_usec,
@@ -463,19 +702,16 @@ ms_dri2_schedule_wait_msc(ClientPtr client, DrawablePtr draw, CARD64 target_msc,
 {
     ScreenPtr screen = draw->pScreen;
     ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
-    modesettingPtr ms = modesettingPTR(scrn);
     ms_dri2_frame_event_ptr wait_info;
-    drmVBlank vbl;
     int ret;
     xf86CrtcPtr crtc = ms_dri2_crtc_covering_drawable(draw);
-    drmmode_crtc_private_ptr drmmode_crtc;
     CARD64 current_msc, current_ust, request_msc;
     uint32_t seq;
+    uint64_t queued_msc;
 
     /* Drawable not visible, return immediately */
     if (!crtc)
         goto out_complete;
-    drmmode_crtc = crtc->driver_private;
 
     wait_info = calloc(1, sizeof(*wait_info));
     if (!wait_info)
@@ -515,14 +751,9 @@ ms_dri2_schedule_wait_msc(ClientPtr client, DrawablePtr draw, CARD64 target_msc,
 
         if (current_msc >= target_msc)
             target_msc = current_msc;
-        vbl.request.type = (DRM_VBLANK_ABSOLUTE |
-                            DRM_VBLANK_EVENT |
-                            drmmode_crtc->vblank_pipe);
-        vbl.request.sequence = ms_crtc_msc_to_kernel_msc(crtc, target_msc);
-        vbl.request.signal = (unsigned long)seq;
 
-        ret = drmWaitVBlank(ms->fd, &vbl);
-        if (ret) {
+        ret = ms_queue_vblank(crtc, MS_QUEUE_ABSOLUTE, target_msc, &queued_msc, seq);
+        if (!ret) {
             static int limit = 5;
             if (limit) {
                 xf86DrvMsg(scrn->scrnIndex, X_WARNING,
@@ -534,7 +765,7 @@ ms_dri2_schedule_wait_msc(ClientPtr client, DrawablePtr draw, CARD64 target_msc,
             goto out_free;
         }
 
-        wait_info->frame = ms_kernel_msc_to_crtc_msc(crtc, vbl.reply.sequence);
+        wait_info->frame = queued_msc;
         DRI2BlockClient(client, draw);
         return TRUE;
     }
@@ -543,9 +774,6 @@ ms_dri2_schedule_wait_msc(ClientPtr client, DrawablePtr draw, CARD64 target_msc,
      * If we get here, target_msc has already passed or we don't have one,
      * so we queue an event that will satisfy the divisor/remainder equation.
      */
-    vbl.request.type =
-        DRM_VBLANK_ABSOLUTE | DRM_VBLANK_EVENT | drmmode_crtc->vblank_pipe;
-
     request_msc = current_msc - (current_msc % divisor) +
         remainder;
     /*
@@ -563,11 +791,7 @@ ms_dri2_schedule_wait_msc(ClientPtr client, DrawablePtr draw, CARD64 target_msc,
     if (!seq)
         goto out_free;
 
-    vbl.request.sequence = ms_crtc_msc_to_kernel_msc(crtc, request_msc);
-    vbl.request.signal = (unsigned long)seq;
-
-    ret = drmWaitVBlank(ms->fd, &vbl);
-    if (ret) {
+    if (!ms_queue_vblank(crtc, MS_QUEUE_ABSOLUTE, request_msc, &queued_msc, seq)) {
         static int limit = 5;
         if (limit) {
             xf86DrvMsg(scrn->scrnIndex, X_WARNING,
@@ -579,7 +803,8 @@ ms_dri2_schedule_wait_msc(ClientPtr client, DrawablePtr draw, CARD64 target_msc,
         goto out_free;
     }
 
-    wait_info->frame = ms_kernel_msc_to_crtc_msc(crtc, vbl.reply.sequence);
+    wait_info->frame = queued_msc;
+
     DRI2BlockClient(client, draw);
 
     return TRUE;
@@ -607,20 +832,18 @@ ms_dri2_schedule_swap(ClientPtr client, DrawablePtr draw,
 {
     ScreenPtr screen = draw->pScreen;
     ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
-    modesettingPtr ms = modesettingPTR(scrn);
-    drmVBlank vbl;
-    int ret;
+    int ret, flip = 0;
     xf86CrtcPtr crtc = ms_dri2_crtc_covering_drawable(draw);
-    drmmode_crtc_private_ptr drmmode_crtc;
     ms_dri2_frame_event_ptr frame_info = NULL;
     uint64_t current_msc, current_ust;
     uint64_t request_msc;
     uint32_t seq;
+    ms_queue_flag ms_flag = MS_QUEUE_ABSOLUTE;
+    uint64_t queued_msc;
 
     /* Drawable not displayed... just complete the swap */
     if (!crtc)
         goto blit_fallback;
-    drmmode_crtc = crtc->driver_private;
 
     frame_info = calloc(1, sizeof(*frame_info));
     if (!frame_info)
@@ -646,6 +869,28 @@ ms_dri2_schedule_swap(ClientPtr client, DrawablePtr draw,
     ms_dri2_reference_buffer(back);
 
     ret = ms_get_crtc_ust_msc(crtc, &current_ust, &current_msc);
+    if (ret != Success)
+        goto blit_fallback;
+
+    /* Flips need to be submitted one frame before */
+    if (can_flip(scrn, draw, front, back)) {
+        frame_info->type = MS_DRI2_QUEUE_FLIP;
+        flip = 1;
+    }
+
+    /* Correct target_msc by 'flip' if frame_info->type == MS_DRI2_QUEUE_FLIP.
+     * Do it early, so handling of different timing constraints
+     * for divisor, remainder and msc vs. target_msc works.
+     */
+    if (*target_msc > 0)
+        *target_msc -= flip;
+
+    /* If non-pageflipping, but blitting/exchanging, we need to use
+     * DRM_VBLANK_NEXTONMISS to avoid unreliable timestamping later
+     * on.
+     */
+    if (flip == 0)
+        ms_flag |= MS_QUEUE_NEXT_ON_MISS;
 
     /*
      * If divisor is zero, or current_msc is smaller than target_msc
@@ -653,13 +898,6 @@ ms_dri2_schedule_swap(ClientPtr client, DrawablePtr draw,
      * the swap.
      */
     if (divisor == 0 || current_msc < *target_msc) {
-        /* We need to use DRM_VBLANK_NEXTONMISS to avoid unreliable
-         * timestamping later on.
-         */
-        vbl.request.type = (DRM_VBLANK_ABSOLUTE |
-                            DRM_VBLANK_NEXTONMISS |
-                            DRM_VBLANK_EVENT |
-                            drmmode_crtc->vblank_pipe);
 
         /* If target_msc already reached or passed, set it to
          * current_msc to ensure we return a reasonable value back
@@ -674,18 +912,14 @@ ms_dri2_schedule_swap(ClientPtr client, DrawablePtr draw,
         if (!seq)
             goto blit_fallback;
 
-        vbl.request.sequence = ms_crtc_msc_to_kernel_msc(crtc, *target_msc);
-        vbl.request.signal = (unsigned long)seq;
-
-        ret = drmWaitVBlank(ms->fd, &vbl);
-        if (ret) {
+        if (!ms_queue_vblank(crtc, ms_flag, *target_msc, &queued_msc, seq)) {
             xf86DrvMsg(scrn->scrnIndex, X_WARNING,
                        "divisor 0 get vblank counter failed: %s\n",
                        strerror(errno));
             goto blit_fallback;
         }
 
-        *target_msc = ms_kernel_msc_to_crtc_msc(crtc, vbl.reply.sequence);
+        *target_msc = queued_msc + flip;
         frame_info->frame = *target_msc;
 
         return TRUE;
@@ -696,10 +930,6 @@ ms_dri2_schedule_swap(ClientPtr client, DrawablePtr draw,
      * and we need to queue an event that will satisfy the divisor/remainder
      * equation.
      */
-    vbl.request.type = (DRM_VBLANK_ABSOLUTE |
-                        DRM_VBLANK_NEXTONMISS |
-                        DRM_VBLANK_EVENT |
-                        drmmode_crtc->vblank_pipe);
 
     request_msc = current_msc - (current_msc % divisor) +
         remainder;
@@ -716,25 +946,22 @@ ms_dri2_schedule_swap(ClientPtr client, DrawablePtr draw,
     if (request_msc <= current_msc)
         request_msc += divisor;
 
-
     seq = ms_drm_queue_alloc(crtc, frame_info,
                              ms_dri2_frame_event_handler,
                              ms_dri2_frame_event_abort);
     if (!seq)
         goto blit_fallback;
 
-    vbl.request.sequence = ms_crtc_msc_to_kernel_msc(crtc, request_msc);
-    vbl.request.signal = (unsigned long)seq;
-
-    ret = drmWaitVBlank(ms->fd, &vbl);
-    if (ret) {
+    /* Account for 1 frame extra pageflip delay if flip > 0 */
+    if (!ms_queue_vblank(crtc, ms_flag, request_msc - flip, &queued_msc, seq)) {
         xf86DrvMsg(scrn->scrnIndex, X_WARNING,
                    "final get vblank counter failed: %s\n",
                    strerror(errno));
         goto blit_fallback;
     }
 
-    *target_msc = ms_kernel_msc_to_crtc_msc(crtc, vbl.reply.sequence);
+    /* Adjust returned value for 1 fame pageflip offset of flip > 0 */
+    *target_msc = queued_msc + flip;
     frame_info->frame = *target_msc;
 
     return TRUE;
@@ -810,8 +1037,9 @@ ms_dri2_screen_init(ScreenPtr screen)
     ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
     modesettingPtr ms = modesettingPTR(scrn);
     DRI2InfoRec info;
+    const char *driver_names[2] = { NULL, NULL };
 
-    if (!glamor_supports_pixmap_import_export(screen)) {
+    if (!ms->glamor.supports_pixmap_import_export(screen)) {
         xf86DrvMsg(scrn->scrnIndex, X_WARNING,
                    "DRI2: glamor lacks support for pixmap import/export\n");
     }
@@ -837,17 +1065,42 @@ ms_dri2_screen_init(ScreenPtr screen)
     info.driverName = NULL; /* Compat field, unused. */
     info.deviceName = drmGetDeviceNameFromFd(ms->fd);
 
-    info.version = 4;
+    info.version = 9;
     info.CreateBuffer = ms_dri2_create_buffer;
     info.DestroyBuffer = ms_dri2_destroy_buffer;
     info.CopyRegion = ms_dri2_copy_region;
     info.ScheduleSwap = ms_dri2_schedule_swap;
     info.GetMSC = ms_dri2_get_msc;
     info.ScheduleWaitMSC = ms_dri2_schedule_wait_msc;
+    info.CreateBuffer2 = ms_dri2_create_buffer2;
+    info.DestroyBuffer2 = ms_dri2_destroy_buffer2;
+    info.CopyRegion2 = ms_dri2_copy_region2;
 
-    /* These two will be filled in by dri2.c */
-    info.numDrivers = 0;
-    info.driverNames = NULL;
+    /* Ask Glamor to obtain the DRI driver name via EGL_MESA_query_driver, */
+    if (ms->glamor.egl_get_driver_name)
+        driver_names[0] = ms->glamor.egl_get_driver_name(screen);
+
+    if (driver_names[0]) {
+        /* There is no VDPAU driver for Intel, fallback to the generic
+         * OpenGL/VAAPI va_gl backend to emulate VDPAU.  Otherwise,
+         * guess that the DRI and VDPAU drivers have the same name.
+         */
+        if (strcmp(driver_names[0], "i965") == 0 ||
+            strcmp(driver_names[0], "iris") == 0) {
+            driver_names[1] = "va_gl";
+        } else {
+            driver_names[1] = driver_names[0];
+        }
+
+        info.numDrivers = 2;
+        info.driverNames = driver_names;
+    } else {
+        /* EGL_MESA_query_driver was unavailable; let dri2.c select the
+         * driver and fill in these fields for us.
+         */
+        info.numDrivers = 0;
+        info.driverNames = NULL;
+    }
 
     return DRI2ScreenInit(screen, &info);
 }
@@ -858,4 +1111,4 @@ ms_dri2_close_screen(ScreenPtr screen)
     DRI2CloseScreen(screen);
 }
 
-#endif /* GLAMOR */
+#endif /* GLAMOR_HAS_GBM */

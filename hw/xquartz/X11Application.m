@@ -48,7 +48,6 @@
 
 #include <mach/mach.h>
 #include <unistd.h>
-#include <AvailabilityMacros.h>
 
 #include <pthread.h>
 
@@ -64,11 +63,9 @@ xpbproxy_run(void);
 #define XSERVER_VERSION "?"
 #endif
 
-#ifdef HAVE_LIBDISPATCH
 #include <dispatch/dispatch.h>
 
 static dispatch_queue_t eventTranslationQueue;
-#endif
 
 #ifndef __has_feature
 #define __has_feature(x) 0
@@ -84,13 +81,8 @@ static dispatch_queue_t eventTranslationQueue;
 
 extern Bool noTestExtensions;
 extern Bool noRenderExtension;
-extern BOOL serverRunning;
 
-#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1050
 static TISInputSourceRef last_key_layout;
-#else
-static KeyboardLayoutRef last_key_layout;
-#endif
 
 /* This preference is only tested on Lion or later as it's not relevant to
  * earlier OS versions.
@@ -276,13 +268,32 @@ message_kit_thread(SEL selector, NSObject *arg)
             if (_x_active) [self activateX:NO];
         }
         else if ([self modalWindow] == nil) {
-            /* Must be an X window. Tell appkit it doesn't have focus. */
+            /* Must be an X window. Tell appkit windows to resign main/key */
             for_appkit = NO;
 
-            if ([self isActive]) {
-                [self deactivate];
-                if (!_x_active && quartzProcs->IsX11Window([e windowNumber]))
-                    [self activateX:YES];
+            if (!_x_active && quartzProcs->IsX11Window([e windowNumber])) {
+                if ([self respondsToSelector:@selector(_setKeyWindow:)] && [self respondsToSelector:@selector(_setMainWindow:)]) {
+                    NSWindow *keyWindow = [self keyWindow];
+                    if (keyWindow) {
+                        [self _setKeyWindow:nil];
+                        [keyWindow resignKeyWindow];
+                    }
+
+                    NSWindow *mainWindow = [self mainWindow];
+                    if (mainWindow) {
+                        [self _setMainWindow:nil];
+                        [mainWindow resignMainWindow];
+                   }
+                 } else {
+                    /* This has a side effect of causing background apps to steal focus from XQuartz.
+                     * Unfortunately, there is no public and stable API to do what we want, but this
+                     * is a decent fallback in the off chance that the above selectors get dropped
+                     * in the future.
+                     */
+                    [self deactivate];
+                }
+
+                [self activateX:YES];
             }
         }
 
@@ -334,14 +345,11 @@ message_kit_thread(SEL selector, NSObject *arg)
                     swallow_keycode = [e keyCode];
                     do_swallow = YES;
                     for_x = NO;
-#if XPLUGIN_VERSION >= 1
-                }
-                else if (XQuartzEnableKeyEquivalents &&
+                } else if (XQuartzEnableKeyEquivalents &&
                          xp_is_symbolic_hotkey_event([e eventRef])) {
                     swallow_keycode = [e keyCode];
                     do_swallow = YES;
                     for_x = NO;
-#endif
                 }
                 else if (XQuartzEnableKeyEquivalents &&
                          [[self mainMenu] performKeyEquivalent:e]) {
@@ -366,6 +374,15 @@ message_kit_thread(SEL selector, NSObject *arg)
                 else {
                     /* No kit window is focused, so send it to X. */
                     for_appkit = NO;
+
+                    /* Reset our swallow state if we're seeing the same keyCode again.
+                     * This can happen if we become !_x_active when the keyCode we
+                     * intended to swallow is delivered.  See:
+                     * https://bugs.freedesktop.org/show_bug.cgi?id=92648
+                     */
+                    if ([e keyCode] == swallow_keycode) {
+                        do_swallow = NO;
+                    }
                 }
             }
             else {       /* KeyUp */
@@ -463,13 +480,9 @@ message_kit_thread(SEL selector, NSObject *arg)
     if (for_appkit) [super sendEvent:e];
 
     if (for_x) {
-#ifdef HAVE_LIBDISPATCH
         dispatch_async(eventTranslationQueue, ^{
                            [self sendX11NSEvent:e];
                        });
-#else
-        [self sendX11NSEvent:e];
-#endif
     }
 }
 
@@ -1069,12 +1082,15 @@ X11ApplicationCanEnterRandR(void)
     if (!XQuartzIsRootless)
         QuartzShowFullscreen(FALSE);
 
-    switch (NSRunAlertPanel(title, @"%@",
-                            NSLocalizedString(@"Allow",
-                                              @""),
-                            NSLocalizedString(@"Cancel",
-                                              @""),
-                            NSLocalizedString(@"Always Allow", @""), msg)) {
+    NSInteger __block alert_result;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        alert_result = NSRunAlertPanel(title, @"%@",
+                                       NSLocalizedString(@"Allow", @""),
+                                       NSLocalizedString(@"Cancel", @""),
+                                       NSLocalizedString(@"Always Allow", @""), msg);
+    });
+
+    switch (alert_result) {
     case NSAlertOtherReturn:
         [X11App prefs_set_boolean:@PREFS_NO_RANDR_ALERT value:YES];
         [X11App prefs_synchronize];
@@ -1085,53 +1101,6 @@ X11ApplicationCanEnterRandR(void)
     default:
         return NO;
     }
-}
-
-void
-X11ApplicationFatalError(const char *f, va_list args)
-{
-#ifdef HAVE_LIBDISPATCH
-    NSString *title, *msg;
-    char *error_msg;
-
-    /* This is called by FatalError() in the server thread just before
-     * we would abort.  If the server never got off the ground, We should
-     * inform the user of the error rather than letting the ever-so-friendly
-     * CrashReporter do it for us.
-     *
-     * This also has the benefit of forcing user interaction rather than
-     * allowing an infinite throttled-restart if the crash occurs before
-     * we can drain the launchd socket.
-     */
-
-    if (serverRunning) {
-        return;
-    }
-
-    title = NSLocalizedString(@"The application X11 could not be opened.",
-                              @"Dialog title when encountering a fatal error");
-    msg = NSLocalizedString(
-        @"An error occurred while starting the X11 server: \"%s\"\n\nClick Quit to quit X11. Click Report to see more details or send a report to Apple.",
-        @"Dialog when encountering a fatal error");
-
-    vasprintf(&error_msg, f, args);
-    msg = [NSString stringWithFormat:msg, error_msg];
-
-    /* We want the AppKit thread to actually service the alert or we will race [NSApp run] and create an
-     * 'NSInternalInconsistencyException', reason: 'NSApp with wrong _running count'
-     */
-    dispatch_sync(dispatch_get_main_queue(), ^{
-                      if (NSAlertDefaultReturn ==
-                          NSRunAlertPanel (title, @"%@",
-                                           NSLocalizedString (@"Quit", @""),
-                                           NSLocalizedString (@"Report...", @""),
-                                           nil, msg)) {
-                          exit (EXIT_FAILURE);
-                      }
-                  });
-
-    /* fall back to caller to do the abort() in the DIX */
-#endif
 }
 
 static void
@@ -1239,35 +1208,21 @@ X11ApplicationMain(int argc, char **argv, char **envp)
 
     /* Calculate the height of the menubar so we can avoid it. */
     aquaMenuBarHeight = [[NSApp mainMenu] menuBarHeight];
-#if ! __LP64__
-    if (!aquaMenuBarHeight) {
-        aquaMenuBarHeight = [NSMenuView menuBarHeight];
-    }
-#endif
     if (!aquaMenuBarHeight) {
         NSScreen* primaryScreen = [[NSScreen screens] objectAtIndex:0];
         aquaMenuBarHeight = NSHeight([primaryScreen frame]) - NSMaxY([primaryScreen visibleFrame]);
     }
 
-#ifdef HAVE_LIBDISPATCH
     eventTranslationQueue = dispatch_queue_create(
         BUNDLE_ID_PREFIX ".X11.NSEventsToX11EventsQueue", NULL);
     assert(eventTranslationQueue != NULL);
-#endif
 
     /* Set the key layout seed before we start the server */
-#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1050
     last_key_layout = TISCopyCurrentKeyboardLayoutInputSource();
 
     if (!last_key_layout)
         ErrorF(
             "X11ApplicationMain: Unable to determine TISCopyCurrentKeyboardLayoutInputSource() at startup.\n");
-#else
-    KLGetCurrentKeyboardLayout(&last_key_layout);
-    if (!last_key_layout)
-        ErrorF(
-            "X11ApplicationMain: Unable to determine KLGetCurrentKeyboardLayout() at startup.\n");
-#endif
 
     if (!QuartsResyncKeymap(FALSE)) {
         ErrorF("X11ApplicationMain: Could not build a valid keymap.\n");
@@ -1350,9 +1305,7 @@ untrusted_str(NSEvent *e)
 #endif
 
 extern void
-darwinEvents_lock(void);
-extern void
-darwinEvents_unlock(void);
+wait_for_mieq_init(void);
 
 - (void) sendX11NSEvent:(NSEvent *)e
 {
@@ -1368,8 +1321,7 @@ darwinEvents_unlock(void);
 
     if (!darwinTabletCurrent) {
         /* Ensure that the event system is initialized */
-        darwinEvents_lock();
-        darwinEvents_unlock();
+        wait_for_mieq_init();
         assert(darwinTabletStylus);
 
         tilt = NSZeroPoint;
@@ -1496,7 +1448,16 @@ darwinEvents_unlock(void);
         goto handle_mouse;
 
     case NSOtherMouseDown:
-        ev_button = 2;
+        // Get the AppKit button number, and convert it from 0-based to 1-based
+        ev_button = [e buttonNumber] + 1;
+
+        /* Translate middle mouse button (3 in AppKit) to button 2 in X11,
+         * and translate additional mouse buttons (4 and higher in AppKit)
+         * to buttons 8 and higher in X11, to match default behavior of X11
+         * on other platforms
+         */
+        ev_button = (ev_button == 3) ? 2 : (ev_button + 4);
+
         ev_type = ButtonPress;
         goto handle_mouse;
 
@@ -1511,7 +1472,9 @@ darwinEvents_unlock(void);
         goto handle_mouse;
 
     case NSOtherMouseUp:
-        ev_button = 2;
+        // See above comments for NSOtherMouseDown
+        ev_button = [e buttonNumber] + 1;
+        ev_button = (ev_button == 3) ? 2 : (ev_button + 4);
         ev_type = ButtonRelease;
         goto handle_mouse;
 
@@ -1526,7 +1489,9 @@ darwinEvents_unlock(void);
         goto handle_mouse;
 
     case NSOtherMouseDragged:
-        ev_button = 2;
+        // See above comments for NSOtherMouseDown
+        ev_button = [e buttonNumber] + 1;
+        ev_button = (ev_button == 3) ? 2 : (ev_button + 4);
         ev_type = MotionNotify;
         goto handle_mouse;
 
@@ -1593,8 +1558,6 @@ handle_mouse:
         }
 
         if (!XQuartzServerVisible && noTestExtensions) {
-#if defined(XPLUGIN_VERSION) && XPLUGIN_VERSION > 0
-            /* Older libXplugin (Tiger/"Stock" Leopard) aren't thread safe, so we can't call xp_find_window from the Appkit thread */
             xp_window_id wid = 0;
             xp_error err;
 
@@ -1607,7 +1570,6 @@ handle_mouse:
             err = xp_find_window(location.x, location.y, 0, &wid);
 
             if (err != XP_Success || (err == XP_Success && wid == 0))
-#endif
             {
                 bgMouseLocation = location;
                 bgMouseLocationUpdated = TRUE;
@@ -1663,11 +1625,6 @@ handle_mouse:
 
     case NSScrollWheel:
     {
-#if MAC_OS_X_VERSION_MAX_ALLOWED < 1050
-        float deltaX = [e deltaX];
-        float deltaY = [e deltaY];
-        BOOL isContinuous = NO;
-#else
         CGFloat deltaX = [e deltaX];
         CGFloat deltaY = [e deltaY];
         CGEventRef cge = [e CGEvent];
@@ -1689,28 +1646,13 @@ handle_mouse:
             deltaY *= lineHeight / 5.0;
         }
 #endif
-#endif
         
-#if !defined(XPLUGIN_VERSION) || XPLUGIN_VERSION == 0
-        /* If we're in the background, we need to send a MotionNotify event
-         * first, since we aren't getting them on background mouse motion
-         */
-        if (!XQuartzServerVisible && noTestExtensions) {
-            bgMouseLocationUpdated = FALSE;
-            DarwinSendPointerEvents(darwinPointer, MotionNotify, 0,
-                                    location.x, location.y,
-                                    0.0, 0.0);
-        }
-#endif
-#if MAC_OS_X_VERSION_MAX_ALLOWED >= 1070
-        // TODO: Change 1117 to NSAppKitVersionNumber10_7 when it is defined
-        if (NSAppKitVersionNumber >= 1117 &&
+        if (NSAppKitVersionNumber >= NSAppKitVersionNumber10_7 &&
             XQuartzScrollInDeviceDirection &&
             [e isDirectionInvertedFromDevice]) {
             deltaX *= -1;
             deltaY *= -1;
         }
-#endif
         /* This hack is in place to better deal with "clicky" scroll wheels:
          * http://xquartz.macosforge.org/trac/ticket/562
          */
@@ -1816,7 +1758,6 @@ handle_mouse:
     }
 
         if (darwinSyncKeymap) {
-#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1050
             TISInputSourceRef key_layout = 
                 TISCopyCurrentKeyboardLayoutInputSource();
             TISInputSourceRef clear;
@@ -1828,12 +1769,7 @@ handle_mouse:
                 clear = last_key_layout;
                 last_key_layout = key_layout;
                 CFRelease(clear);
-#else
-            KeyboardLayoutRef key_layout;
-            KLGetCurrentKeyboardLayout(&key_layout);
-            if (key_layout != last_key_layout) {
-                last_key_layout = key_layout;
-#endif
+
                 /* Update keyInfo */
                 if (!QuartsResyncKeymap(TRUE)) {
                     ErrorF(

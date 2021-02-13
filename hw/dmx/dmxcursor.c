@@ -186,7 +186,7 @@ dmxWarpCursor(DeviceIntPtr pDev, ScreenPtr pScreen, int x, int y)
 {
     DMXDBG3("dmxWarpCursor(%d,%d,%d)\n", pScreen->myNum, x, y);
 #if 11 /*BP*/
-        /* This call is depracated.  Replace with???? */
+        /* This call is deprecated.  Replace with???? */
         miPointerWarpCursor(pDev, pScreen, x, y);
 #else
     pScreen->SetCursorPosition(pDev, pScreen, x, y, FALSE);
@@ -203,7 +203,7 @@ miPointerScreenFuncRec dmxPointerCursorFuncs = {
 static int *
 dmxSLCreate(void)
 {
-    int *list = malloc(dmxNumScreens * sizeof(*list));
+    int *list = xallocarray(dmxNumScreens, sizeof(*list));
     int i;
 
     for (i = 0; i < dmxNumScreens; i++)

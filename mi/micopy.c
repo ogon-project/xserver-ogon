@@ -62,7 +62,7 @@ miCopyRegion(DrawablePtr pSrcDrawable,
 
         if (nbox > 1) {
             /* keep ordering in each band, reverse order of bands */
-            pboxNew1 = (BoxPtr) malloc(sizeof(BoxRec) * nbox);
+            pboxNew1 = xallocarray(nbox, sizeof(BoxRec));
             if (!pboxNew1)
                 return;
             pboxBase = pboxNext = pbox + nbox - 1;
@@ -93,7 +93,7 @@ miCopyRegion(DrawablePtr pSrcDrawable,
 
         if (nbox > 1) {
             /* reverse order of rects in each band */
-            pboxNew2 = (BoxPtr) malloc(sizeof(BoxRec) * nbox);
+            pboxNew2 = xallocarray(nbox, sizeof(BoxRec));
             if (!pboxNew2) {
                 free(pboxNew1);
                 return;
@@ -159,11 +159,9 @@ miDoCopy(DrawablePtr pSrcDrawable,
         return NULL;
     }
 
-    if (pSrcDrawable->pScreen->SourceValidate) {
-        (*pSrcDrawable->pScreen->SourceValidate) (pSrcDrawable, xIn, yIn,
-                                                  widthSrc, heightSrc,
-                                                  pGC->subWindowMode);
-    }
+    (*pSrcDrawable->pScreen->SourceValidate) (pSrcDrawable, xIn, yIn,
+                                              widthSrc, heightSrc,
+                                              pGC->subWindowMode);
 
     /* Compute source clip region */
     if (pSrcDrawable->type == DRAWABLE_PIXMAP) {

@@ -85,21 +85,10 @@ typedef uint32_t RESTYPE;
 #define RT_LASTPREDEF	((RESTYPE)9)
 #define RT_NONE		((RESTYPE)0)
 
+extern _X_EXPORT unsigned int ResourceClientBits(void);
 /* bits and fields within a resource id */
 #define RESOURCE_AND_CLIENT_COUNT   29  /* 29 bits for XIDs */
-#if MAXCLIENTS == 64
-#define RESOURCE_CLIENT_BITS	6
-#endif
-#if MAXCLIENTS == 128
-#define RESOURCE_CLIENT_BITS	7
-#endif
-#if MAXCLIENTS == 256
-#define RESOURCE_CLIENT_BITS	8
-#endif
-#if MAXCLIENTS == 512
-#define RESOURCE_CLIENT_BITS	9
-#endif
-/* client field offset */
+#define RESOURCE_CLIENT_BITS        ResourceClientBits() /* client field offset */
 #define CLIENTOFFSET	    (RESOURCE_AND_CLIENT_COUNT - RESOURCE_CLIENT_BITS)
 /* resource field */
 #define RESOURCE_ID_MASK	((1 << CLIENTOFFSET) - 1)
@@ -281,7 +270,6 @@ extern _X_EXPORT RESTYPE TypeMask;
     of bits by either masking numBits lower bits of the ID or by
     providing at most MAXHASHSIZE hashes.
 */
-extern _X_EXPORT int HashResourceID(XID id,
-                                    int numBits);
+extern _X_EXPORT int HashResourceID(XID id, unsigned int numBits);
 
 #endif /* RESOURCE_H */

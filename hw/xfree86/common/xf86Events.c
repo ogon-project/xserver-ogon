@@ -54,7 +54,6 @@
 #endif
 
 #include <X11/X.h>
-#include <X11/Xpoll.h>
 #include <X11/Xproto.h>
 #include <X11/Xatom.h>
 #include "misc.h"
@@ -87,25 +86,7 @@
 #include "xf86platformBus.h"
 #include "systemd-logind.h"
 
-/*
- * This is a toggling variable:
- *  FALSE = No VT switching keys have been pressed last time around
- *  TRUE  = Possible VT switch Pending
- * (DWH - 12/2/93)
- *
- * This has been generalised to work with Linux and *BSD+syscons (DHD)
- */
-
-Bool VTSwitchEnabled = TRUE;    /* Allows run-time disabling for
-                                 *BSD and for avoiding VT
-                                 switches when using the DRI
-                                 automatic full screen mode.*/
-
-extern fd_set EnabledDevices;
-
-#ifdef XF86PM
 extern void (*xf86OSPMClose) (void);
-#endif
 
 static void xf86VTSwitch(void);
 
@@ -123,12 +104,6 @@ typedef struct x_IHRec {
 } IHRec, *IHPtr;
 
 static IHPtr InputHandlers = NULL;
-
-Bool
-LegalModifier(unsigned int key, DeviceIntPtr pDev)
-{
-    return TRUE;
-}
 
 /*
  * TimeSinceLastInputEvent --
@@ -180,14 +155,11 @@ ProcessInputEvents(void)
 void
 xf86ProcessActionEvent(ActionEvent action, void *arg)
 {
-    DebugF("ProcessActionEvent(%d,%x)\n", (int) action, arg);
+    DebugF("ProcessActionEvent(%d,%p)\n", (int) action, arg);
     switch (action) {
     case ACTION_TERMINATE:
         if (!xf86Info.dontZap) {
             xf86Msg(X_INFO, "Server zapped. Shutting down.\n");
-#ifdef XFreeXDGA
-            DGAShutdown();
-#endif
             GiveUp(0);
         }
         break;
@@ -200,7 +172,7 @@ xf86ProcessActionEvent(ActionEvent action, void *arg)
             xf86ZoomViewport(xf86Info.currentScreen, -1);
         break;
     case ACTION_SWITCHSCREEN:
-        if (VTSwitchEnabled && !xf86Info.dontVTSwitch && arg) {
+        if (!xf86Info.dontVTSwitch && arg) {
             int vtno = *((int *) arg);
 
             if (vtno != xf86Info.vtno) {
@@ -212,7 +184,7 @@ xf86ProcessActionEvent(ActionEvent action, void *arg)
         }
         break;
     case ACTION_SWITCHSCREEN_NEXT:
-        if (VTSwitchEnabled && !xf86Info.dontVTSwitch) {
+        if (!xf86Info.dontVTSwitch) {
             if (!xf86VTActivate(xf86Info.vtno + 1)) {
                 /* If first try failed, assume this is the last VT and
                  * try wrapping around to the first vt.
@@ -225,7 +197,7 @@ xf86ProcessActionEvent(ActionEvent action, void *arg)
         }
         break;
     case ACTION_SWITCHSCREEN_PREV:
-        if (VTSwitchEnabled && !xf86Info.dontVTSwitch && xf86Info.vtno > 0) {
+        if (!xf86Info.dontVTSwitch && xf86Info.vtno > 0) {
             if (!xf86VTActivate(xf86Info.vtno - 1)) {
                 /* Don't know what the maximum VT is, so can't wrap around */
                 ErrorF("Failed to switch from vt%02d to previous vt: %s\n",
@@ -245,64 +217,23 @@ xf86ProcessActionEvent(ActionEvent action, void *arg)
 
 /* ARGSUSED */
 void
-xf86Wakeup(void *blockData, int err, void *pReadmask)
+xf86Wakeup(void *blockData, int err)
 {
-    fd_set *LastSelectMask = (fd_set *) pReadmask;
-    fd_set devicesWithInput;
-    InputInfoPtr pInfo;
-
-    if (err >= 0) {
-
-        XFD_ANDSET(&devicesWithInput, LastSelectMask, &EnabledDevices);
-        if (XFD_ANYSET(&devicesWithInput)) {
-            pInfo = xf86InputDevs;
-            while (pInfo) {
-                if (pInfo->read_input && pInfo->fd >= 0 &&
-                    (FD_ISSET(pInfo->fd, &devicesWithInput) != 0)) {
-                    OsBlockSIGIO();
-
-                    /*
-                     * Remove the descriptior from the set because more than one
-                     * device may share the same file descriptor.
-                     */
-                    FD_CLR(pInfo->fd, &devicesWithInput);
-
-                    pInfo->read_input(pInfo);
-                    OsReleaseSIGIO();
-                }
-                pInfo = pInfo->next;
-            }
-        }
-    }
-
-    if (err >= 0) {             /* we don't want the handlers called if select() */
-        IHPtr ih, ih_tmp;       /* returned with an error condition, do we?      */
-
-        nt_list_for_each_entry_safe(ih, ih_tmp, InputHandlers, next) {
-            if (ih->enabled && ih->fd >= 0 && ih->ihproc &&
-                (FD_ISSET(ih->fd, ((fd_set *) pReadmask)) != 0)) {
-                ih->ihproc(ih->fd, ih->data);
-            }
-        }
-    }
-
     if (xf86VTSwitchPending())
         xf86VTSwitch();
 }
 
 /*
- * xf86SigioReadInput --
- *    signal handler for the SIGIO signal.
+ * xf86ReadInput --
+ *    input thread handler
  */
+
 static void
-xf86SigioReadInput(int fd, void *closure)
+xf86ReadInput(int fd, int ready, void *closure)
 {
-    int errno_save = errno;
     InputInfoPtr pInfo = closure;
 
     pInfo->read_input(pInfo);
-
-    errno = errno_save;
 }
 
 /*
@@ -312,9 +243,7 @@ xf86SigioReadInput(int fd, void *closure)
 void
 xf86AddEnabledDevice(InputInfoPtr pInfo)
 {
-    if (!xf86InstallSIGIOHandler(pInfo->fd, xf86SigioReadInput, pInfo)) {
-        AddEnabledDevice(pInfo->fd);
-    }
+    InputThreadRegisterDev(pInfo->fd, xf86ReadInput, pInfo);
 }
 
 /*
@@ -324,47 +253,7 @@ xf86AddEnabledDevice(InputInfoPtr pInfo)
 void
 xf86RemoveEnabledDevice(InputInfoPtr pInfo)
 {
-    if (!xf86RemoveSIGIOHandler(pInfo->fd)) {
-        RemoveEnabledDevice(pInfo->fd);
-    }
-}
-
-static int *xf86SignalIntercept = NULL;
-
-void
-xf86InterceptSignals(int *signo)
-{
-    if ((xf86SignalIntercept = signo))
-        *signo = -1;
-}
-
-static void (*xf86SigIllHandler) (void) = NULL;
-
-void
-xf86InterceptSigIll(void (*sigillhandler) (void))
-{
-    xf86SigIllHandler = sigillhandler;
-}
-
-/*
- * xf86SigWrapper --
- *    Catch unexpected signals and exit or continue cleanly.
- */
-int
-xf86SigWrapper(int signo)
-{
-    if ((signo == SIGILL) && xf86SigIllHandler) {
-        (*xf86SigIllHandler) ();
-        return 0;               /* continue */
-    }
-
-    if (xf86SignalIntercept && (*xf86SignalIntercept < 0)) {
-        *xf86SignalIntercept = signo;
-        return 0;               /* continue */
-    }
-
-    xf86Info.caughtSignal = TRUE;
-    return 1;                   /* abort */
+    InputThreadUnregisterDev(pInfo->fd);
 }
 
 /*
@@ -391,20 +280,20 @@ xf86ReleaseKeys(DeviceIntPtr pDev)
     /*
      * Hmm... here is the biggest hack of every time !
      * It may be possible that a switch-vt procedure has finished BEFORE
-     * you released all keys neccessary to do this. That peculiar behavior
+     * you released all keys necessary to do this. That peculiar behavior
      * can fool the X-server pretty much, cause it assumes that some keys
-     * were not released. TWM may stuck alsmost completly....
+     * were not released. TWM may stuck almost completely....
      * OK, what we are doing here is after returning from the vt-switch
-     * exeplicitely unrelease all keyboard keys before the input-devices
-     * are reenabled.
+     * explicitly unrelease all keyboard keys before the input-devices
+     * are re-enabled.
      */
 
     for (i = keyc->xkbInfo->desc->min_key_code;
          i < keyc->xkbInfo->desc->max_key_code; i++) {
         if (key_is_down(pDev, i, KEY_POSTED)) {
-            OsBlockSIGIO();
-            QueueKeyboardEvents(pDev, KeyRelease, i, NULL);
-            OsReleaseSIGIO();
+            input_lock();
+            QueueKeyboardEvents(pDev, KeyRelease, i);
+            input_unlock();
         }
     }
 }
@@ -448,9 +337,10 @@ xf86UpdateHasVTProperty(Bool hasVT)
     if (property_name == BAD_RESOURCE)
         FatalError("Failed to retrieve \"HAS_VT\" atom\n");
     for (i = 0; i < xf86NumScreens; i++) {
-        ChangeWindowProperty(xf86ScrnToScreen(xf86Screens[i])->root,
-                             property_name, XA_INTEGER, 32,
-                             PropModeReplace, 1, &value, TRUE);
+        dixChangeWindowProperty(serverClient,
+                                xf86ScrnToScreen(xf86Screens[i])->root,
+                                property_name, XA_INTEGER, 32,
+                                PropModeReplace, 1, &value, TRUE);
     }
 }
 
@@ -486,22 +376,18 @@ xf86VTLeave(void)
     for (pInfo = xf86InputDevs; pInfo; pInfo = pInfo->next)
         xf86DisableInputDeviceForVTSwitch(pInfo);
 
-    OsBlockSIGIO();
+    input_lock();
     for (i = 0; i < xf86NumScreens; i++)
         xf86Screens[i]->LeaveVT(xf86Screens[i]);
     for (i = 0; i < xf86NumGPUScreens; i++)
         xf86GPUScreens[i]->LeaveVT(xf86GPUScreens[i]);
 
-    xf86AccessLeave();      /* We need this here, otherwise */
-
     if (!xf86VTSwitchAway())
         goto switch_failed;
 
-#ifdef XF86PM
     if (xf86OSPMClose)
         xf86OSPMClose();
     xf86OSPMClose = NULL;
-#endif
 
     for (i = 0; i < xf86NumScreens; i++) {
         /*
@@ -519,7 +405,6 @@ xf86VTLeave(void)
 
 switch_failed:
     DebugF("xf86VTSwitch: Leave failed\n");
-    xf86AccessEnter();
     for (i = 0; i < xf86NumScreens; i++) {
         if (!xf86Screens[i]->EnterVT(xf86Screens[i]))
             FatalError("EnterVT failed for screen %d\n", i);
@@ -544,7 +429,7 @@ switch_failed:
         else
             xf86EnableGeneralHandler(ih);
     }
-    OsReleaseSIGIO();
+    input_unlock();
 }
 
 void
@@ -558,13 +443,10 @@ xf86VTEnter(void)
     if (!xf86VTSwitchTo())
         return;
 
-#ifdef XF86PM
     xf86OSPMClose = xf86OSPMOpen();
-#endif
 
     if (xorgHWAccess)
         xf86EnableIO();
-    xf86AccessEnter();
     for (i = 0; i < xf86NumScreens; i++) {
         xf86Screens[i]->vtSema = TRUE;
         if (!xf86Screens[i]->EnterVT(xf86Screens[i]))
@@ -602,7 +484,7 @@ xf86VTEnter(void)
 
     xf86UpdateHasVTProperty(TRUE);
 
-    OsReleaseSIGIO();
+    input_unlock();
 }
 
 /*
@@ -635,6 +517,16 @@ xf86VTSwitch(void)
 
 /* Input handler registration */
 
+static void
+xf86InputHandlerNotify(int fd, int ready, void *data)
+{
+    IHPtr       ih = data;
+
+    if (ih->enabled && ih->fd >= 0 && ih->ihproc) {
+        ih->ihproc(ih->fd, ih->data);
+    }
+}
+
 static void *
 addInputHandler(int fd, InputHandlerProc proc, void *data)
 {
@@ -652,6 +544,11 @@ addInputHandler(int fd, InputHandlerProc proc, void *data)
     ih->data = data;
     ih->enabled = TRUE;
 
+    if (!SetNotifyFd(fd, xf86InputHandlerNotify, X_NOTIFY_READ, ih)) {
+        free(ih);
+        return NULL;
+    }
+
     ih->next = InputHandlers;
     InputHandlers = ih;
 
@@ -663,10 +560,8 @@ xf86AddInputHandler(int fd, InputHandlerProc proc, void *data)
 {
     IHPtr ih = addInputHandler(fd, proc, data);
 
-    if (ih) {
-        AddEnabledDevice(fd);
+    if (ih)
         ih->is_input = TRUE;
-    }
     return ih;
 }
 
@@ -675,8 +570,6 @@ xf86AddGeneralHandler(int fd, InputHandlerProc proc, void *data)
 {
     IHPtr ih = addInputHandler(fd, proc, data);
 
-    if (ih)
-        AddGeneralSocket(fd);
     return ih;
 }
 
@@ -706,6 +599,8 @@ removeInputHandler(IHPtr ih)
 {
     IHPtr p;
 
+    if (ih->fd >= 0)
+        RemoveNotifyFd(ih->fd);
     if (ih == InputHandlers)
         InputHandlers = ih->next;
     else {
@@ -730,8 +625,6 @@ xf86RemoveInputHandler(void *handler)
     ih = handler;
     fd = ih->fd;
 
-    if (ih->fd >= 0)
-        RemoveEnabledDevice(ih->fd);
     removeInputHandler(ih);
 
     return fd;
@@ -749,8 +642,6 @@ xf86RemoveGeneralHandler(void *handler)
     ih = handler;
     fd = ih->fd;
 
-    if (ih->fd >= 0)
-        RemoveGeneralSocket(ih->fd);
     removeInputHandler(ih);
 
     return fd;
@@ -767,7 +658,7 @@ xf86DisableInputHandler(void *handler)
     ih = handler;
     ih->enabled = FALSE;
     if (ih->fd >= 0)
-        RemoveEnabledDevice(ih->fd);
+        RemoveNotifyFd(ih->fd);
 }
 
 void
@@ -781,7 +672,7 @@ xf86DisableGeneralHandler(void *handler)
     ih = handler;
     ih->enabled = FALSE;
     if (ih->fd >= 0)
-        RemoveGeneralSocket(ih->fd);
+        RemoveNotifyFd(ih->fd);
 }
 
 void
@@ -795,7 +686,7 @@ xf86EnableInputHandler(void *handler)
     ih = handler;
     ih->enabled = TRUE;
     if (ih->fd >= 0)
-        AddEnabledDevice(ih->fd);
+        SetNotifyFd(ih->fd, xf86InputHandlerNotify, X_NOTIFY_READ, ih);
 }
 
 void
@@ -809,29 +700,7 @@ xf86EnableGeneralHandler(void *handler)
     ih = handler;
     ih->enabled = TRUE;
     if (ih->fd >= 0)
-        AddGeneralSocket(ih->fd);
-}
-
-/*
- * As used currently by the DRI, the return value is ignored.
- */
-Bool
-xf86EnableVTSwitch(Bool new)
-{
-    static Bool def = TRUE;
-    Bool old;
-
-    old = VTSwitchEnabled;
-    if (!new) {
-        /* Disable VT switching */
-        def = VTSwitchEnabled;
-        VTSwitchEnabled = FALSE;
-    }
-    else {
-        /* Restore VT switching to default */
-        VTSwitchEnabled = def;
-    }
-    return old;
+        SetNotifyFd(ih->fd, xf86InputHandlerNotify, X_NOTIFY_READ, ih);
 }
 
 void

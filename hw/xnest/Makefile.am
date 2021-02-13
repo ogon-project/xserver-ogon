@@ -41,11 +41,11 @@ SRCS =	Args.c \
 	XNPixmap.h \
 	XNWindow.h \
 	xnest-config.h \
-	$(top_srcdir)/mi/miinitext.c
+	$(top_srcdir)/mi/miinitext.c \
+	$(top_srcdir)/mi/miinitext.h
 
 XNEST_LIBS = \
         @XNEST_LIBS@ \
-	$(top_builddir)/Xext/libXextdpmsstubs.la \
 	$(top_builddir)/Xi/libXistubs.la
 
 Xnest_SOURCES = $(SRCS)
@@ -56,11 +56,6 @@ Xnest_LDFLAGS = $(LD_EXPORT_SYMBOLS_FLAG)
 
 EXTRA_DIST = icon \
              screensaver
-
-# -UDPMSExtension for miinitext? can't put into 
-# OS_DEFINES???
-# EXT_DEFINES???
-# ICONFIGFILES -- SpecialCObjectRule
 
 relink:
 	$(AM_V_at)rm -f Xnest$(EXEEXT) && $(MAKE) Xnest$(EXEEXT)
